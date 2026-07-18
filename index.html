@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#090a12" />
+    <meta name="description" content="Rune Deep – ein düsterer, prozeduraler Browser-Dungeon-Brawler." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='8' fill='%23090a12'/%3E%3Cpath d='M17 48 31 13l16 9-15 8 8 21-9-18-9 15z' fill='%23d88d50'/%3E%3C/svg%3E" />
+    <title>Rune Deep · Dungeon Brawler</title>
+  </head>
+  <body>
+    <main id="app" aria-label="Rune Deep Spiel">
+      <canvas id="game" width="960" height="540" aria-label="Spielfeld"></canvas>
+      <div id="vignette" aria-hidden="true"></div>
+      <div id="hud" class="hidden" aria-live="polite">
+        <section class="hud-left">
+          <div class="bar health"><span id="health-fill"></span><b id="health-text"></b></div>
+          <div class="bar xp"><span id="xp-fill"></span><b id="xp-text"></b></div>
+          <div class="hud-row"><span id="level-text"></span><span id="gold-text"></span><span id="potion-text"></span></div>
+        </section>
+        <section class="hud-center"><div id="room-title"></div><div id="objective"></div></section>
+        <section class="hud-right"><div id="dash-indicator"><i></i><span>SHIFT · DASH</span></div><div id="effects"></div></section>
+        <div id="boss-hud" class="hidden"><label>DER RUNENWÄCHTER</label><div><span id="boss-fill"></span></div></div>
+        <div id="toast-stack" aria-live="assertive"></div>
+      </div>
+      <div id="overlay-root"></div>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
