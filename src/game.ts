@@ -50,7 +50,7 @@ export class Game implements UIActions {
 
   restart(): void { this.audio.start(); this.resetRun(); this.mode = 'running'; this.ui.beginGame(); }
   resume(): void { if (!this.player) return; this.ui.clearOverlay(); this.mode = 'running'; this.input.reset(); }
-  mainMenu(): void { this.mode = 'menu'; this.enemies = []; this.projectiles = []; this.hazards = []; this.input.reset(); this.ui.showStart(); }
+  mainMenu(): void { this.mode = 'menu'; this.audio.setMusicState('calm'); this.enemies = []; this.projectiles = []; this.hazards = []; this.input.reset(); this.ui.showStart(); }
 
   chooseUpgrade(id: string): void {
     const upgrade = UPGRADES.find(item => item.id === id); if (!upgrade) return;
@@ -104,6 +104,7 @@ export class Game implements UIActions {
     if (this.input.consume('Escape')) { this.pause(); return; }
     if (this.input.consume('KeyI')) { this.mode = 'character'; this.ui.showCharacter(this.player); return; }
     if (this.input.consume('KeyM')) { this.mode = 'map'; this.ui.showMap(this.buildMapHtml()); return; }
+    this.audio.setMusicState(this.room.kind === 'boss' && this.room.state === 'active' ? 'boss' : this.room.state === 'active' ? 'combat' : 'calm');
     this.updateTimers(dt); this.updatePlayer(dt); this.updateEnemies(dt); this.updateProjectiles(dt); this.updateHazards(dt); this.updatePickups(dt); this.updateEffects(dt);
     this.checkRoomComplete(); this.checkTransition(); this.updateHud();
     if (this.endTimer > 0) { this.endTimer -= dt; if (this.endTimer <= 0) this.finish(true); }
@@ -119,11 +120,11 @@ export class Game implements UIActions {
     const p = this.player; const move = this.input.movement(); p.aim = Math.atan2(this.input.mouse.y - p.y, this.input.mouse.x - p.x);
     if (this.input.consume('ShiftLeft') || this.input.consume('ShiftRight')) this.tryDash(move);
     if (p.dashTimer > 0) {
-      this.moveCircle(p, p.dashDir.x * 590 * dt, p.dashDir.y * 590 * dt, p.radius);
+      p.vx = p.dashDir.x * 590; p.vy = p.dashDir.y * 590; this.moveCircle(p, p.vx * dt, p.vy * dt, p.radius);
       if (!this.store.settings.reducedEffects && Math.random() < .65) this.particle(p.x + rand(-8, 8), p.y + rand(-8, 8), '#70aac2', rand(-30, 30), rand(-30, 30), .24, rand(3, 7));
     } else {
-      const speed = p.speed * (p.speedBuff > 0 ? 1.3 : 1); this.moveCircle(p, move.x * speed * dt, move.y * speed * dt, p.radius);
-      if ((this.input.mouse.down || this.input.isDown('Space')) && p.attackTimer <= 0 && this.roomIntro < 1.75) this.attack();
+      const speed = p.speed * (p.speedBuff > 0 ? 1.3 : 1); p.vx = move.x * speed; p.vy = move.y * speed; this.moveCircle(p, p.vx * dt, p.vy * dt, p.radius);
+      if ((this.input.mouse.down || this.input.mouse.pressed || this.input.isDown('Space')) && p.attackTimer <= 0 && this.roomIntro < 1.75) this.attack();
     }
     if (this.input.consume('KeyQ')) this.usePotion();
     if (this.input.consume('KeyE')) this.interact();
@@ -140,7 +141,7 @@ export class Game implements UIActions {
   }
 
   private attack(): void {
-    const p = this.player; p.attackTimer = p.attackRate; p.attackAnim = .16; p.attackCombo = (p.attackCombo + 1) % 3; p.attackCount++; this.audio.play('slash');
+    const p = this.player; p.attackTimer = p.attackRate; p.attackAnim = .34; p.attackCombo = (p.attackCombo + 1) % 3; p.attackCount++; this.audio.play('slash');
     const combo = p.attackCombo === 2; const range = p.range * (combo ? 1.15 : 1); const arc = combo ? 1.15 : .88; let hit = false;
     for (const enemy of this.enemies) {
       if (enemy.state === 'dead' || dist(p, enemy) > range + enemy.radius) continue;
@@ -442,7 +443,7 @@ export class Game implements UIActions {
 
   private doorsOpen(): boolean { return this.room.state === 'cleared'; }
   private hasRelic(id: RelicId): boolean { return this.player.relics.includes(id); }
-  private pause(): void { if (this.mode !== 'running') return; this.mode = 'paused'; this.input.reset(); this.ui.showPause(this.player); }
+  private pause(): void { if (this.mode !== 'running') return; this.mode = 'paused'; this.audio.setMusicState('calm'); this.input.reset(); this.ui.showPause(this.player); }
 
   private updateHud(): void {
     const alive = this.enemies.filter(e => e.state !== 'dead'); const boss = alive.find(e => e.kind === 'boss');
@@ -460,7 +461,7 @@ export class Game implements UIActions {
   }
 
   private finish(victory: boolean): void {
-    if (this.mode === 'ending') return; this.mode = 'ending'; this.input.reset(); this.stats.elapsed = Math.max(this.stats.elapsed, .1); this.audio.play(victory ? 'victory' : 'defeat');
+    if (this.mode === 'ending') return; this.mode = 'ending'; this.audio.setMusicState('calm'); this.input.reset(); this.stats.elapsed = Math.max(this.stats.elapsed, .1); this.audio.play(victory ? 'victory' : 'defeat');
     const score = Math.floor(this.stats.kills * 110 + this.stats.goldFound * 9 + this.player.level * 300 + (victory ? 5000 : 0)); const r = this.store.records;
     r.bestScore = Math.max(r.bestScore, score); r.highestLevel = Math.max(r.highestLevel, this.player.level); r.mostKills = Math.max(r.mostKills, this.stats.kills);
     if (victory) { r.victories++; r.fastestWin = r.fastestWin === null ? this.stats.elapsed : Math.min(r.fastestWin, this.stats.elapsed); }

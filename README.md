@@ -8,7 +8,7 @@
 - **HTML5 Canvas 2D** für den deterministischen, zeitbasierten Game-Loop
 - **HTML/CSS** für zugängliche Menüs, HUD und Overlays
 - **Vite 6** als Entwicklungsserver und Produktions-Bundler
-- **Web Audio API** für prozedural erzeugte Musik und Soundeffekte
+- **Web Audio API** für adaptive, mehrschichtige Musik und Soundeffekte
 - **Local Storage** für Einstellungen und Bestwerte
 
 Die eigene Canvas-Engine hält die Produktion klein, offline-freundlich und unabhängig von externen Laufzeitbibliotheken. Alle Grafiken werden zur Laufzeit im konsistenten Low-Resolution-Dungeonstil gezeichnet; es werden keine externen Bild-, Musik- oder Fontdateien geladen.
@@ -25,12 +25,12 @@ npm run dev
 
 Vite zeigt anschließend die lokale Adresse an, normalerweise `http://localhost:5173`.
 
-Alternativ ist das Repository über `pnpm-lock.yaml` reproduzierbar:
+### Windows-Schnellstart
 
-```bash
-pnpm install
-pnpm dev
-```
+Nach der Installation von Node.js kann das Spiel auch direkt per Doppelklick auf
+`SPIEL_STARTEN.cmd` geöffnet werden. Der Starter installiert bei Bedarf die
+Abhängigkeiten, startet den lokalen Server und öffnet das Spiel automatisch im
+Standardbrowser. Das separate Serverfenster kann zum Beenden geschlossen werden.
 
 ## Produktions-Build
 
@@ -63,13 +63,13 @@ Die Seite verhindert Scrollen durch Spieltasten. Diagonalbewegung wird normalisi
 - Vier normale Gegnertypen: Skelettkrieger, Schleim, Bogenschütze und Schattenbestie
 - Elitevarianten mit Aura, verstärkten Werten und zusätzlicher Belohnung
 - Zweiphasiger Runenwächter mit Nahschlag, Schockwelle, Projektilring, Runenfeldern, Sturmangriff und Beschwörung
-- Reaktionsschneller Nahkampf mit Dreierkombo, Trefferbogen, Rückstoß, kritischen Treffern, Schadenszahlen und Hit-Stop-artigem Feedback
+- Reaktionsschneller Nahkampf mit animierter Dreierkombo, klarer Schwert-Schwungbahn, Rückstoß, kritischen Treffern, Schadenszahlen und Hit-Stop-artigem Feedback
 - Dash-Abklingzeit, Unverwundbarkeit, Treffer-I-Frames, Rüstung und Heiltränke
 - Erfahrung, pausierte Levelaufstiege und drei zufällige Segnungen pro Stufe
 - Gold, Heilung, Tränke, Schlüssel, temporäre Buffs, zerstörbare Kisten und acht seltene Relikte
 - Schatz- und Rastraum, Fallen mit visueller Aktivierung sowie atmosphärische Fackelbeleuchtung
 - Start-, Pause-, Charakter-, Karten-, Level-up-, Sieg- und Niederlagenbildschirm
-- Prozedurales Web-Audio, separate Lautstärken, Stummschaltung, deaktivierbare Erschütterung und reduzierte Effekte
+- Adaptive Dungeon-Musik mit Bass, Melodie, Flächen und Percussion, separate Lautstärken, Stummschaltung, deaktivierbare Erschütterung und reduzierte Effekte
 - Robuste lokale Speicherung mit validierten Standardwerten und versioniertem Speicherschlüssel
 
 ## Projektstruktur
