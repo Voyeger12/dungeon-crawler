@@ -10,20 +10,45 @@
   </head>
   <body>
     <main id="app" aria-label="Rune Deep Spiel">
-      <canvas id="game" width="960" height="540" tabindex="0" aria-label="Spielfeld"></canvas>
-      <div id="vignette" aria-hidden="true"></div>
-      <div id="hud" class="hidden" aria-live="polite">
-        <section class="hud-left">
-          <div class="bar health"><span id="health-fill"></span><b id="health-text"></b></div>
-          <div class="bar xp"><span id="xp-fill"></span><b id="xp-text"></b></div>
-          <div class="hud-row"><span id="level-text"></span><span id="gold-text"></span><span id="potion-text"></span></div>
-        </section>
-        <section class="hud-center"><div id="room-title"></div><div id="objective"></div></section>
-        <section class="hud-right"><div id="dash-indicator"><i></i><span>SHIFT · DASH</span></div><div id="effects"></div></section>
-        <div id="boss-hud" class="hidden"><label>DER RUNENWÄCHTER</label><div><span id="boss-fill"></span></div></div>
-        <div id="toast-stack" aria-live="assertive"></div>
+      <div id="game-frame" class="game-frame">
+        <canvas id="game" width="960" height="540" tabindex="0" aria-label="Spielfeld"></canvas>
+        <div id="vignette" aria-hidden="true"></div>
+        <div id="hud" class="hidden" aria-label="Spielstatus" data-combat="false">
+          <section id="hud-vitals" class="hud-module iron-panel" aria-label="Lebenspunkte und Erfahrung">
+            <div class="level-seal"><span>Stufe</span><strong id="level-value">1</strong></div>
+            <div class="vital-bars">
+              <div id="health-bar" class="meter meter-health" role="progressbar" aria-label="Lebenspunkte" aria-valuemin="0"><span id="health-fill" class="meter-fill"></span><strong id="health-text">120 / 120 LP</strong></div>
+              <div id="xp-bar" class="meter meter-xp" role="progressbar" aria-label="Erfahrung" aria-valuemin="0"><span id="xp-fill" class="meter-fill"></span><strong id="xp-text">0 / 92 EP</strong></div>
+            </div>
+          </section>
+
+          <section id="hud-room" class="hud-module stone-plaque" aria-label="Raum und Ziel"><strong id="room-title">Das versiegelte Tor</strong><span id="objective">Dungeon erkunden</span></section>
+
+          <section id="hud-resources" class="hud-module iron-panel hud-secondary" aria-label="Beute">
+            <span class="resource"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><path d="M9 8h5a3 3 0 0 1 0 6H9m4-8v12"></path></svg><span>Gold</span><strong id="gold-value">0</strong></span>
+            <span id="key-resource" class="resource hidden"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="10" r="4"></circle><path d="m11 13 7 7m-3-3 2-2m-5 0 2-2"></path></svg><span>Runenschlüssel</span><strong id="key-value">0</strong></span>
+          </section>
+
+          <nav id="hud-shortcuts" class="hud-module hud-secondary" aria-label="Schnellzugriff"><span><kbd>C</kbd> Charakter</span><span><kbd>M</kbd> Karte</span></nav>
+
+          <section id="hud-actions" aria-label="Kampfaktionen">
+            <div id="potion-action" class="action-slot iron-panel" data-state="ready"><kbd>Q</kbd><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6m-5 0v5l-4 6a5 5 0 0 0 4 7h4a5 5 0 0 0 4-7l-4-6V3"></path><path d="M8 15h8"></path></svg><span class="action-copy"><strong>Heiltrank <b id="potion-count">×2</b></strong><small id="potion-state">Heilt bis zu 42 LP</small></span></div>
+            <div id="dash-indicator" class="action-slot iron-panel" data-state="ready"><kbd>Shift</kbd><span id="dash-fill" class="ability-meter" aria-hidden="true"><i></i></span><span class="action-copy"><strong>Dash</strong><small id="dash-state">Bereit</small></span></div>
+          </section>
+
+          <section id="effects" class="hud-effects" aria-label="Aktive Effekte"></section>
+          <aside id="tutorial-hint" class="tutorial-hint hidden" aria-hidden="true" aria-label="Spielhinweis">
+            <span class="tutorial-heading"><small>Runenrat</small><strong id="tutorial-title">Bewegen</strong></span>
+            <kbd id="tutorial-key">WASD</kbd><span id="tutorial-text">Erkunde den Raum.</span>
+          </aside>
+          <div id="context-prompt" class="context-prompt hidden" aria-hidden="true"><kbd id="context-key">E</kbd><strong id="context-text">Truhe öffnen</strong></div>
+          <section id="boss-hud" class="boss-hud hidden" aria-label="Boss"><strong id="boss-name">Der Runenwächter</strong><div id="boss-bar" class="meter meter-boss" role="progressbar" aria-label="Bosslebenspunkte" aria-valuemin="0"><span id="boss-fill" class="meter-fill"></span><strong id="boss-text">1050 / 1050</strong></div></section>
+          <div id="toast-stack" aria-hidden="true"></div>
+        </div>
       </div>
       <div id="overlay-root"></div>
+      <div id="game-status-region" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+      <div id="game-alert-region" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></div>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

@@ -6,7 +6,7 @@ export class InputManager {
   private pressed = new Set<string>();
   mouse = { x: WORLD.width / 2, y: WORLD.height / 2, down: false, pressed: false };
 
-  constructor(private canvas: HTMLCanvasElement, private onBlur: () => void) {
+  constructor(private canvas: HTMLCanvasElement, private onBlur: () => void, private gameplayActive: () => boolean = () => true) {
     window.addEventListener('keydown', this.onKeyDown, { passive: false });
     window.addEventListener('keyup', this.onKeyUp);
     canvas.addEventListener('pointermove', this.onPointerMove);
@@ -17,7 +17,10 @@ export class InputManager {
   }
 
   private onKeyDown = (event: KeyboardEvent) => {
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(event.code)) event.preventDefault();
+    const target = event.target as HTMLElement | null;
+    const editing = Boolean(target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable));
+    if (event.ctrlKey || event.altKey || event.metaKey || (editing && event.code !== 'Escape')) return;
+    if (this.gameplayActive() && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(event.code)) event.preventDefault();
     if (!this.keys.has(event.code)) this.pressed.add(event.code);
     this.keys.add(event.code);
   };
@@ -36,6 +39,7 @@ export class InputManager {
 
   isDown(...codes: string[]): boolean { return codes.some(code => this.keys.has(code)); }
   consume(code: string): boolean { const found = this.pressed.has(code); this.pressed.delete(code); return found; }
+  consumeAny(...codes: string[]): boolean { const found = codes.some(code => this.pressed.has(code)); codes.forEach(code => this.pressed.delete(code)); return found; }
   movement(): Vec {
     const x = Number(this.isDown('KeyD', 'ArrowRight')) - Number(this.isDown('KeyA', 'ArrowLeft'));
     const y = Number(this.isDown('KeyS', 'ArrowDown')) - Number(this.isDown('KeyW', 'ArrowUp'));

@@ -65,7 +65,13 @@ export interface RunStats {
 }
 
 export interface Settings {
-  master: number; music: number; sfx: number; muted: boolean; shake: boolean; reducedEffects: boolean;
+  master: number; music: number; sfx: number; muted: boolean; shake: boolean; reducedEffects: boolean; tutorialHints: boolean;
+}
+
+export type TutorialId = 'move' | 'attack' | 'dash' | 'potion' | 'interact' | 'character' | 'map' | 'gold' | 'key';
+
+export interface TutorialProgress {
+  completed: Partial<Record<TutorialId, true>>;
 }
 
 export interface Records {

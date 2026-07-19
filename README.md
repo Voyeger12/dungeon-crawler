@@ -51,7 +51,7 @@ Der Build wird in `dist/` erzeugt. `npm run build` führt zuerst die strikte Typ
 | `Shift` | Dash mit kurzen Unverwundbarkeitsframes |
 | `E` | Truhe öffnen / an Runenkreis rasten |
 | `Q` | Heiltrank verwenden |
-| `I` | Charakterwerte, Segnungen und Relikte |
+| `C` / `I` | Charakterkodex mit Werten, Runensegen und Relikten |
 | `M` | Große Dungeonkarte |
 | `Esc` | Pause |
 
@@ -68,7 +68,9 @@ Die Seite verhindert Scrollen durch Spieltasten. Diagonalbewegung wird normalisi
 - Erfahrung, pausierte Levelaufstiege und drei zufällige Segnungen pro Stufe
 - Gold, Heilung, Tränke, Schlüssel, temporäre Buffs, zerstörbare Kisten und acht seltene Relikte
 - Schatz- und Rastraum, Fallen mit visueller Aktivierung sowie atmosphärische Fackelbeleuchtung
-- Start-, Pause-, Charakter-, Karten-, Level-up-, Sieg- und Niederlagenbildschirm
+- Mittelalterlich gestaltetes, responsives HUD mit großen Lebens-/EP-Balken, klar benannten Ressourcen, Dash-/Trankstatus und Kontextaktionen
+- Start-, Pause-, Charakterkodex-, Karten-, Level-up-, Sieg- und Niederlagenbildschirm mit Tastatur-Fokusführung
+- Optionale kontextabhängige Spielhinweise mit gespeichertem Fortschritt und Reset in den Einstellungen
 - Adaptive Dungeon-Musik mit Bass, Melodie, Flächen und Percussion, separate Lautstärken, Stummschaltung, deaktivierbare Erschütterung und reduzierte Effekte
 - Robuste lokale Speicherung mit validierten Standardwerten und versioniertem Speicherschlüssel
 
@@ -82,17 +84,19 @@ src/
   game.ts        Game-Loop und Spielsysteme
   input.ts       Tastatur-, Maus- und Fokusbehandlung
   math.ts        Vektor- und Zufallsfunktionen
+  hud.ts         Gecachter, barrierearmer HUD-Zustand und DOM-Updates
   model.ts       Gemeinsame Typen und Zustandsmodelle
   renderer.ts    Canvas-Rendering und prozedurale Pixelgrafik
   storage.ts     Validierte Local-Storage-Daten
   style.css      Menüs, HUD und responsive Darstellung
+  tutorial.ts    Kontextabhängige Einsteigerhinweise
   ui.ts          DOM-Overlays und UI-Ereignisse
   main.ts        Einstiegspunkt
 ```
 
 ## Speicherung
 
-Gespeichert werden Bestpunktzahl, schnellster Sieg, höchstes Level, meiste besiegte Gegner, Anzahl der Durchläufe und Siege sowie alle Audio-/Grafikeinstellungen. Fehlende, alte oder beschädigte Daten werden abgefangen und durch sichere Standardwerte ergänzt. Ein laufender Dungeon wird bewusst nicht gespeichert.
+Gespeichert werden Bestpunktzahl, schnellster Sieg, höchstes Level, meiste besiegte Gegner, Anzahl der Durchläufe und Siege, alle Audio-/Grafikeinstellungen sowie der Fortschritt der optionalen Spielhinweise. Speicherstände der Version 2 werden automatisch in Version 3 übernommen. Fehlende, alte oder beschädigte Daten werden abgefangen und durch sichere Standardwerte ergänzt. Ein laufender Dungeon wird bewusst nicht gespeichert.
 
 ## Hinweise
 

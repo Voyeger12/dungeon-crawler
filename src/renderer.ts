@@ -218,8 +218,10 @@ export class Renderer {
   private minimap(state: RenderState): void {
     const c = this.ctx; const visible = [...state.rooms.values()].filter(r => r.visited || r.id === state.room.id || Object.values(state.room.connections).includes(r.id));
     const xs = visible.map(r => r.gx); if (!xs.length) return;
-    const centerX = 875; const centerY = 100; const scale = 18; c.save(); c.globalAlpha = .85; c.fillStyle = '#080910bb'; c.fillRect(815, 52, 120, 96); c.strokeStyle = '#3e3948'; c.strokeRect(815.5, 52.5, 119, 95);
-    for (const r of visible) { const x = centerX + (r.gx - state.room.gx) * scale; const y = centerY + (r.gy - state.room.gy) * scale; c.fillStyle = r.id === state.room.id ? '#e7a760' : r.state === 'cleared' ? '#668078' : '#3c3947'; c.fillRect(x - 6, y - 5, 12, 10); if (r.kind === 'boss' && r.visited) { c.fillStyle = '#d75865'; c.fillRect(x - 2, y - 2, 4, 4); } }
+    const centerX = 875; const centerY = 100; const scale = 18; c.save(); c.globalAlpha = .92;
+    const frame = c.createLinearGradient(815, 52, 935, 148); frame.addColorStop(0, '#29251fdd'); frame.addColorStop(1, '#0b0b09e8'); c.fillStyle = frame; c.fillRect(815, 52, 120, 96);
+    c.strokeStyle = '#70665a'; c.lineWidth = 2; c.strokeRect(815.5, 52.5, 119, 95); c.strokeStyle = '#2c2822'; c.lineWidth = 1; c.strokeRect(820.5, 57.5, 109, 85);
+    for (const r of visible) { const x = centerX + (r.gx - state.room.gx) * scale; const y = centerY + (r.gy - state.room.gy) * scale; c.fillStyle = r.id === state.room.id ? '#edc77d' : r.state === 'cleared' ? '#718b7b' : '#514b45'; c.fillRect(x - 6, y - 5, 12, 10); c.strokeStyle = r.id === state.room.id ? '#7f4f2f' : '#211e1b'; c.strokeRect(x - 6.5, y - 5.5, 13, 11); if (r.kind === 'boss' && r.visited) { c.fillStyle = '#d75865'; c.fillRect(x - 2, y - 2, 4, 4); } }
     c.restore();
   }
 
