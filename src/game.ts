@@ -1,8 +1,9 @@
-import { AudioManager } from './audio';
+import { AudioManager, type AudioSnapshot } from './audio';
 import { ENEMY_STATS, PLAYER_BASE, RELICS, UPGRADES, WORLD, XP_FOR_LEVEL, type RelicId, type UpgradeId } from './config';
 import { generateDungeon, oppositeDirection } from './dungeon';
 import { InputManager } from './input';
 import type { HudContext, HudState } from './hud';
+import { buildMapViewModel, renderMapViewMarkup } from './map-view';
 import { angleDiff, circleHit, clamp, dist, normalize, pick, rand, randi, shuffle, type Vec } from './math';
 import type { Direction, Enemy, EnemyKind, FloatText, Hazard, Particle, Pickup, Player, Projectile, Room, RunStats } from './model';
 import { Renderer } from './renderer';
@@ -12,7 +13,13 @@ import { UI, type UIActions } from './ui';
 
 type Mode = 'menu' | 'running' | 'paused' | 'level' | 'character' | 'map' | 'settings' | 'ending';
 type ModalOrigin = 'running' | 'paused' | 'menu';
+type LevelPhase = 'idle' | 'intro' | 'choosing' | 'committed' | 'exit';
+type LevelReward = { level: number; options: typeof UPGRADES[number][] };
 const INTERACT_RANGE = 70;
+const LEVEL_INTRO_TIME = .7;
+const LEVEL_COMMIT_TIME = .22;
+const LEVEL_EXIT_TIME = .18;
+const LEVEL_SELECTION_INPUTS = ['Space', 'Digit1', 'Digit2', 'Digit3'] as const;
 
 export class Game implements UIActions {
   private renderer: Renderer;
@@ -35,7 +42,12 @@ export class Game implements UIActions {
   private lastTime = 0;
   private roomIntro = 0;
   private roomTransitionCd = 0;
-  private pendingLevels = 0;
+  private pendingLevels: LevelReward[] = [];
+  private levelPhase: LevelPhase = 'idle';
+  private levelPhaseTime = 0;
+  private levelSelectionLocked = false;
+  private levelAudioSnapshot?: AudioSnapshot;
+  private pendingDefeat = false;
   private endTimer = 0;
   private nextId = 1;
   private levelOptions: typeof UPGRADES[number][] = [];
@@ -81,10 +93,12 @@ export class Game implements UIActions {
   resetTutorials(): void { this.store.resetTutorials(); this.tutorial.suspendUntilNextRun(); }
 
   chooseUpgrade(id: string): void {
-    const upgrade = UPGRADES.find(item => item.id === id); if (!upgrade) return;
+    if (this.mode !== 'level' || this.levelPhase !== 'choosing' || this.levelSelectionLocked) return;
+    const upgrade = this.levelOptions.find(item => item.id === id); if (!upgrade) return;
+    this.levelSelectionLocked = true; this.levelPhase = 'committed'; this.levelPhaseTime = 0;
+    this.ui.setLevelUpState('committed', upgrade.id); this.audio.playLevelUpConfirm();
     this.applyUpgrade(upgrade.id); this.player.upgrades.push(upgrade.id); this.tutorial.queue('character'); this.ui.toast(`${upgrade.icon} ${upgrade.name}`, 'good');
-    this.pendingLevels--;
-    if (this.pendingLevels > 0) window.setTimeout(() => this.openLevelUp(), 120); else this.resume();
+    this.pendingLevels.shift();
   }
 
   private resetRun(): void {
@@ -101,13 +115,14 @@ export class Game implements UIActions {
       burnChance: 0, dashShield: false, damageBuff: 0, speedBuff: 0
     };
     this.stats = { startTime: performance.now(), elapsed: 0, kills: 0, goldFound: 0, roomsVisited: 1, potionsUsed: 0, damageDealt: 0, damageTaken: 0 };
-    this.time = 0; this.roomIntro = 2.2; this.roomTransitionCd = .5; this.pendingLevels = 0; this.endTimer = 0; this.nextId = 1; this.tutorial.beginRun();
+    this.time = 0; this.roomIntro = 2.2; this.roomTransitionCd = .5; this.pendingLevels = []; this.pendingDefeat = false; this.endTimer = 0; this.nextId = 1;
+    this.levelOptions = []; this.levelPhase = 'idle'; this.levelPhaseTime = 0; this.levelSelectionLocked = false; this.levelAudioSnapshot = undefined; this.tutorial.beginRun();
     this.store.records.runs++; this.store.save();
   }
 
   private loop = (now: number) => {
     const dt = Math.min(.033, Math.max(0, (now - this.lastTime) / 1000 || 0)); this.lastTime = now;
-    if (this.mode === 'running') this.update(dt); else this.handleOverlayKeys();
+    if (this.mode === 'running') this.update(dt); else if (this.mode === 'level') this.updateLevelUp(dt); else this.handleOverlayKeys();
     if (this.player && this.room && this.mode !== 'menu') this.renderer.render({
       room: this.room, rooms: this.rooms, player: this.player, enemies: this.enemies, projectiles: this.projectiles,
       pickups: this.pickups, hazards: this.hazards, particles: this.particles, texts: this.texts, time: this.time,
@@ -123,10 +138,6 @@ export class Game implements UIActions {
     else if (this.mode === 'map' && this.input.consumeAny('KeyM', 'Escape')) this.closeModal();
     else if (this.mode === 'settings' && this.input.consume('Escape')) this.closeModal();
     else if (this.mode === 'ending' && this.input.consume('KeyR')) this.restart();
-    else if (this.mode === 'level') {
-      const index = this.input.consume('Digit1') ? 0 : this.input.consume('Digit2') ? 1 : this.input.consume('Digit3') ? 2 : -1;
-      if (index >= 0 && this.levelOptions[index]) this.chooseUpgrade(this.levelOptions[index].id);
-    }
   }
 
   private update(dt: number): void {
@@ -136,8 +147,10 @@ export class Game implements UIActions {
     if (this.input.consume('KeyM')) { this.modalOrigin = 'running'; this.mode = 'map'; this.input.reset(); this.tutorial.complete('map'); this.ui.showMap(this.buildMapHtml()); return; }
     this.audio.setMusicState(this.room.kind === 'boss' && this.room.state === 'active' ? 'boss' : this.room.state === 'active' ? 'combat' : 'calm');
     this.updateTimers(dt); this.updatePlayer(dt); this.updateEnemies(dt); this.updateProjectiles(dt); this.updateHazards(dt); this.updatePickups(dt); this.updateEffects(dt);
-    this.checkRoomComplete(); this.checkTransition(); this.updateHud(dt);
-    if (this.endTimer > 0) { this.endTimer -= dt; if (this.endTimer <= 0) this.finish(true); }
+    if (this.resolveTerminalEvents(dt)) return;
+    this.checkRoomComplete(); this.updateHud(dt);
+    if (this.resolveLevelUpEvent()) return;
+    this.checkTransition();
   }
 
   private updateTimers(dt: number): void {
@@ -221,11 +234,66 @@ export class Game implements UIActions {
 
   private gainXp(amount: number): void {
     const p = this.player; p.xp += amount;
-    while (p.xp >= p.xpNeeded) { p.xp -= p.xpNeeded; p.level++; p.xpNeeded = XP_FOR_LEVEL(p.level); this.pendingLevels++; }
-    if (this.pendingLevels > 0 && this.mode === 'running') this.openLevelUp();
+    while (p.xp >= p.xpNeeded) {
+      p.xp -= p.xpNeeded; p.level++; p.xpNeeded = XP_FOR_LEVEL(p.level);
+      this.pendingLevels.push({ level: p.level, options: shuffle(UPGRADES).slice(0, 3) });
+    }
   }
 
-  private openLevelUp(): void { this.mode = 'level'; this.input.reset(); this.audio.play('level'); this.levelOptions = shuffle(UPGRADES).slice(0, 3); this.ui.showLevelUp(this.levelOptions, this.player.level); }
+  private resolveTerminalEvents(dt: number): boolean {
+    if (this.pendingDefeat || this.player.hp <= 0) {
+      this.pendingLevels = []; this.finish(false); return true;
+    }
+    if (this.endTimer > 0) {
+      this.pendingLevels = []; this.endTimer -= dt;
+      if (this.endTimer <= 0) this.finish(true);
+      return true;
+    }
+    return false;
+  }
+
+  private resolveLevelUpEvent(): boolean {
+    if (this.pendingLevels.length === 0) return false;
+    this.openLevelUp(false); return true;
+  }
+
+  private openLevelUp(stacked: boolean): void {
+    const reward = this.pendingLevels[0]; if (!reward || this.mode === 'ending') return;
+    this.mode = 'level'; this.levelPhase = 'intro'; this.levelPhaseTime = 0; this.levelSelectionLocked = false;
+    this.levelOptions = reward.options; this.input.reset();
+    if (!stacked) { this.levelAudioSnapshot = this.audio.captureScene(); this.audio.beginLevelUp(this.levelAudioSnapshot); }
+    else this.audio.playLevelUpFanfare(true);
+    this.ui.showLevelUp(this.levelOptions, reward.level, 'intro');
+  }
+
+  private updateLevelUp(dt: number): void {
+    if (this.levelPhase === 'intro') {
+      this.levelPhaseTime += dt;
+      if (this.levelPhaseTime >= LEVEL_INTRO_TIME && this.input.isNeutral(...LEVEL_SELECTION_INPUTS)) {
+        this.levelPhase = 'choosing'; this.levelPhaseTime = 0; this.ui.setLevelUpState('choosing');
+      }
+      return;
+    }
+    if (this.levelPhase === 'choosing') {
+      const index = this.input.consume('Digit1') ? 0 : this.input.consume('Digit2') ? 1 : this.input.consume('Digit3') ? 2 : -1;
+      if (index >= 0 && this.levelOptions[index]) this.chooseUpgrade(this.levelOptions[index].id);
+      return;
+    }
+    if (this.levelPhase === 'committed') {
+      this.levelPhaseTime += dt;
+      if (this.levelPhaseTime < LEVEL_COMMIT_TIME) return;
+      if (this.pendingLevels.length > 0) this.openLevelUp(true);
+      else { this.levelPhase = 'exit'; this.levelPhaseTime = 0; this.ui.setLevelUpState('exit'); }
+      return;
+    }
+    if (this.levelPhase === 'exit') {
+      this.levelPhaseTime += dt; if (this.levelPhaseTime < LEVEL_EXIT_TIME) return;
+      const snapshot = this.levelAudioSnapshot; this.levelAudioSnapshot = undefined;
+      if (snapshot) this.audio.restoreScene(snapshot);
+      this.ui.clearOverlay(); this.mode = 'running'; this.levelPhase = 'idle'; this.levelOptions = [];
+      this.input.reset(); this.canvas.focus();
+    }
+  }
 
   private applyUpgrade(id: UpgradeId): void {
     const p = this.player;
@@ -317,7 +385,7 @@ export class Game implements UIActions {
     p.hp -= damage; p.invuln = .72; p.flash = .15; this.stats.damageTaken += damage; this.floatText(p.x, p.y - 25, `-${damage}`, '#ff7581', 18); this.burst(p.x, p.y, '#e75567', 10, 155); this.audio.play('hurt'); this.renderer.shake = 8; this.renderer.flash = .08;
     const away = normalize({ x: p.x - source.x, y: p.y - source.y }); this.moveCircle(p, away.x * 18, away.y * 18, p.radius);
     if (this.hasRelic('thorn-crown') && 'hp' in source && source !== p) { const enemy = source as Enemy; if (enemy.state !== 'dead' && enemy.kind !== 'boss') this.damageEnemy(enemy, Math.round(damage * .25), false); }
-    if (p.hp <= 0) { p.hp = 0; this.finish(false); }
+    if (p.hp <= 0) { p.hp = 0; this.pendingDefeat = true; }
   }
 
   private usePotion(): void {
@@ -514,11 +582,7 @@ export class Game implements UIActions {
   }
 
   private buildMapHtml(): string {
-    const visible = [...this.rooms.values()].filter(r => r.visited || Object.values(this.room.connections).includes(r.id)); const minX = Math.min(...visible.map(r => r.gx)); const maxX = Math.max(...visible.map(r => r.gx)); const minY = Math.min(...visible.map(r => r.gy)); const maxY = Math.max(...visible.map(r => r.gy));
-    const point = (r: Room) => ({ x: 60 + (r.gx - minX) / Math.max(1, maxX - minX) * 620, y: 50 + (r.gy - minY) / Math.max(1, maxY - minY) * 240 }); let lines = '';
-    for (const r of visible) for (const id of Object.values(r.connections)) { const other = this.rooms.get(id); if (!other || !visible.includes(other) || r.id > other.id) continue; const a = point(r); const b = point(other); const length = Math.hypot(b.x-a.x,b.y-a.y); const angle = Math.atan2(b.y-a.y,b.x-a.x); lines += `<i class="map-line" style="left:${a.x}px;top:${a.y}px;width:${length}px;transform:rotate(${angle}rad)"></i>`; }
-    const icons: Record<Room['kind'], string> = { start: 'ᚱ', combat: '·', elite: '♜', treasure: '◆', rest: '✚', boss: '☠' };
-    const nodes = visible.map(r => { const p = point(r); return `<b class="map-room ${r.id === this.room.id ? 'current' : ''} ${r.state}" style="left:${p.x}px;top:${p.y}px" title="${r.kind}">${r.visited ? icons[r.kind] : '?'}</b>`; }).join(''); return `<div class="map-grid">${lines}${nodes}</div>`;
+    return renderMapViewMarkup(buildMapViewModel(this.rooms, this.room));
   }
 
   private finish(victory: boolean): void {

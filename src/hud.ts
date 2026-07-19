@@ -121,7 +121,6 @@ export class HudView {
         const label = document.createElement('strong'); label.textContent = effect.label; const value = document.createElement('small'); value.textContent = effect.value; item.append(label, value); return item;
       }));
     }
-
     e.tutorial.classList.toggle('hidden', !state.tutorial); this.attribute(e.tutorial, 'aria-hidden', String(!state.tutorial));
     if (state.tutorial) { this.text(e.tutorialKey, state.tutorial.key); this.text(e.tutorialTitle, state.tutorial.title); this.text(e.tutorialText, state.tutorial.text); this.data(e.tutorial, 'tutorial', state.tutorial.id); }
 

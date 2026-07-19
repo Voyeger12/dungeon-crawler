@@ -2,28 +2,52 @@ import { COLORS, RELICS, WORLD } from './config';
 import { clamp, lerp } from './math';
 import type { Enemy, FloatText, Hazard, Particle, Pickup, Player, Projectile, Room } from './model';
 
+const loadImage = (source: string): HTMLImageElement | undefined => {
+  if (typeof Image === 'undefined') return undefined;
+  const image = new Image(); image.decoding = 'async'; image.src = source; return image;
+};
+
+const imageReady = (image?: HTMLImageElement): image is HTMLImageElement => Boolean(image?.complete && image.naturalWidth > 0);
+
 export interface RenderState {
   room: Room; rooms: Map<string, Room>; player: Player; enemies: Enemy[]; projectiles: Projectile[];
   pickups: Pickup[]; hazards: Hazard[]; particles: Particle[]; texts: FloatText[]; time: number;
   doorsOpen: boolean; roomIntro: number; settings: { shake: boolean; reducedEffects: boolean };
 }
 
+export function configureLogicalCanvasContext(
+  context: Pick<CanvasRenderingContext2D, 'setTransform' | 'imageSmoothingEnabled'>,
+  canvas: Pick<HTMLCanvasElement, 'width' | 'height'>
+): void {
+  const scaleX = Math.max(1, canvas.width) / WORLD.width;
+  const scaleY = Math.max(1, canvas.height) / WORLD.height;
+  context.setTransform(scaleX, 0, 0, scaleY, 0, 0);
+  context.imageSmoothingEnabled = false;
+}
+
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
+  private readonly art = {
+    floor: loadImage('/assets/dungeon/floor-stone.webp'), wall: loadImage('/assets/dungeon/wall-stone.webp'),
+    pillar: loadImage('/assets/dungeon/pillar.webp'), crate: loadImage('/assets/dungeon/crate.webp'), barrel: loadImage('/assets/dungeon/barrel.webp'),
+    rubble: loadImage('/assets/dungeon/rubble.webp'), spikes: loadImage('/assets/dungeon/spikes.webp'),
+    chestClosed: loadImage('/assets/dungeon/chest-closed.webp'), chestOpen: loadImage('/assets/dungeon/chest-open.webp'), shrine: loadImage('/assets/dungeon/rune-shrine.webp')
+  };
+  private wallPattern?: CanvasPattern;
   shake = 0;
   flash = 0;
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d', { alpha: false })!;
-    this.ctx.imageSmoothingEnabled = false;
+    configureLogicalCanvasContext(this.ctx, this.canvas);
   }
 
   render(state: RenderState): void {
-    const c = this.ctx; const shake = state.settings.shake ? this.shake : 0;
+    const c = this.ctx; configureLogicalCanvasContext(c, this.canvas); const shake = state.settings.shake ? this.shake : 0;
     const sx = shake ? (Math.random() - .5) * shake : 0; const sy = shake ? (Math.random() - .5) * shake : 0;
     this.shake = Math.max(0, this.shake - .8); this.flash = Math.max(0, this.flash - .04);
     c.save(); c.translate(sx, sy); this.floor(state); this.hazards(state); this.decor(state);
-    this.pickups(state); this.projectiles(state); this.enemies(state); this.player(state); this.particles(state); this.minimap(state);
+    this.pickups(state); this.projectiles(state); this.enemies(state); this.player(state); this.particles(state);
     c.restore();
     if (this.flash > 0) { c.fillStyle = `rgba(255,230,210,${this.flash})`; c.fillRect(0, 0, WORLD.width, WORLD.height); }
     if (state.roomIntro > 0) this.intro(state);
@@ -32,10 +56,14 @@ export class Renderer {
   private floor(state: RenderState): void {
     const c = this.ctx; c.fillStyle = COLORS.void; c.fillRect(0, 0, WORLD.width, WORLD.height);
     c.fillStyle = COLORS.floor; c.fillRect(WORLD.wall, WORLD.wall, WORLD.width - WORLD.wall * 2, WORLD.height - WORLD.wall * 2);
-    c.strokeStyle = COLORS.grout; c.lineWidth = 1;
-    for (let y = WORLD.wall; y < WORLD.height - WORLD.wall; y += 32) {
-      c.beginPath(); c.moveTo(WORLD.wall, y + .5); c.lineTo(WORLD.width - WORLD.wall, y + .5); c.stroke();
-      for (let x = WORLD.wall + ((y / 32) % 2) * 16; x < WORLD.width - WORLD.wall; x += 64) { c.beginPath(); c.moveTo(x + .5, y); c.lineTo(x + .5, Math.min(y + 32, WORLD.height - WORLD.wall)); c.stroke(); }
+    if (imageReady(this.art.floor)) {
+      c.save(); c.globalAlpha = .82; c.drawImage(this.art.floor, WORLD.wall, WORLD.wall, WORLD.width - WORLD.wall * 2, WORLD.height - WORLD.wall * 2); c.restore();
+    } else {
+      c.strokeStyle = COLORS.grout; c.lineWidth = 1;
+      for (let y = WORLD.wall; y < WORLD.height - WORLD.wall; y += 32) {
+        c.beginPath(); c.moveTo(WORLD.wall, y + .5); c.lineTo(WORLD.width - WORLD.wall, y + .5); c.stroke();
+        for (let x = WORLD.wall + ((y / 32) % 2) * 16; x < WORLD.width - WORLD.wall; x += 64) { c.beginPath(); c.moveTo(x + .5, y); c.lineTo(x + .5, Math.min(y + 32, WORLD.height - WORLD.wall)); c.stroke(); }
+      }
     }
     const seed = state.room.gx * 37 + state.room.gy * 71;
     for (let i = 0; i < 24; i++) {
@@ -50,7 +78,8 @@ export class Renderer {
     const c = this.ctx; const w = WORLD.wall; const dh = WORLD.doorHalf;
     const north = Boolean(state.room.connections.north); const south = Boolean(state.room.connections.south);
     const west = Boolean(state.room.connections.west); const east = Boolean(state.room.connections.east);
-    c.fillStyle = COLORS.wall;
+    if (!this.wallPattern && imageReady(this.art.wall)) this.wallPattern = c.createPattern(this.art.wall, 'repeat') ?? undefined;
+    c.fillStyle = this.wallPattern ?? COLORS.wall;
     const horizontal = (y: number, hasDoor: boolean) => {
       if (hasDoor) { c.fillRect(0, y, WORLD.width / 2 - dh, w); c.fillRect(WORLD.width / 2 + dh, y, WORLD.width / 2 - dh, w); }
       else c.fillRect(0, y, WORLD.width, w);
@@ -89,7 +118,15 @@ export class Renderer {
     for (const o of state.room.obstacles) {
       if (o.hp <= 0) continue;
       c.save(); c.translate(o.x, o.y);
-      if (o.kind === 'spikes') {
+      const sprite = this.art[o.kind];
+      if (imageReady(sprite)) {
+        const active = o.kind === 'spikes' && Math.sin(state.time * 2.2 + o.phase) > .35;
+        const width = o.radius * (o.kind === 'rubble' ? 2.75 : o.kind === 'pillar' ? 2.15 : 2.45);
+        const ratio = sprite.naturalHeight / sprite.naturalWidth;
+        const height = width * ratio * (o.kind === 'spikes' ? (active ? 1 : .82) : 1);
+        c.globalAlpha = o.kind === 'spikes' && !active ? .72 : 1;
+        c.drawImage(sprite, -width / 2, o.radius * .82 - height, width, height);
+      } else if (o.kind === 'spikes') {
         const active = Math.sin(state.time * 2.2 + o.phase) > .35; c.fillStyle = active ? '#b8a3ac' : '#514957';
         for (let i = 0; i < 8; i++) { const a = i / 8 * Math.PI * 2; c.beginPath(); c.moveTo(Math.cos(a) * 8, Math.sin(a) * 8); c.lineTo(Math.cos(a) * (active ? 28 : 16), Math.sin(a) * (active ? 28 : 16)); c.lineTo(Math.cos(a + .28) * 11, Math.sin(a + .28) * 11); c.fill(); }
       } else {
@@ -104,7 +141,10 @@ export class Renderer {
     }
     if (state.room.chest) this.chest(state.room.chest.x, state.room.chest.y, state.room.chest.opened, state.time);
     if (state.room.kind === 'rest') {
-      c.save(); c.translate(WORLD.width / 2, WORLD.height / 2); c.strokeStyle = '#68c5bd'; c.shadowColor = '#68c5bd'; c.shadowBlur = 18; c.lineWidth = 3; c.beginPath(); c.arc(0, 0, 45 + Math.sin(state.time * 2) * 3, 0, Math.PI * 2); c.stroke(); c.font = '32px serif'; c.fillStyle = '#9ce4d8'; c.textAlign = 'center'; c.fillText('ᛉ', 0, 11); c.restore(); c.shadowBlur = 0;
+      c.save(); c.translate(WORLD.width / 2, WORLD.height / 2); c.strokeStyle = '#844638'; c.shadowColor = '#a24635'; c.shadowBlur = 13; c.lineWidth = 2; c.beginPath(); c.arc(0, 5, 48 + Math.sin(state.time * 2) * 2, 0, Math.PI * 2); c.stroke();
+      if (imageReady(this.art.shrine)) { const width = 96; const height = width * this.art.shrine.naturalHeight / this.art.shrine.naturalWidth; c.drawImage(this.art.shrine, -width / 2, 30 - height, width, height); }
+      else { c.font = '32px serif'; c.fillStyle = '#b56a52'; c.textAlign = 'center'; c.fillText('ᛉ', 0, 11); }
+      c.restore(); c.shadowBlur = 0;
     }
     if (state.room.kind === 'start') { c.fillStyle = '#675284'; c.globalAlpha = .5 + Math.sin(state.time * 2) * .12; c.font = '68px serif'; c.textAlign = 'center'; c.fillText('ᚱ', WORLD.width / 2, WORLD.height / 2 + 22); c.globalAlpha = 1; }
   }
@@ -116,7 +156,14 @@ export class Renderer {
   }
 
   private chest(x: number, y: number, opened: boolean, time: number): void {
-    const c = this.ctx; c.save(); c.translate(x, y); c.fillStyle = '#07081188'; c.beginPath(); c.ellipse(4, 18, 32, 13, 0, 0, Math.PI * 2); c.fill(); c.shadowColor = opened ? '#6d5b42' : '#d9a758'; c.shadowBlur = opened ? 0 : 10 + Math.sin(time * 3) * 3; c.fillStyle = opened ? '#392a29' : '#704836'; c.fillRect(-28, -4, 56, 27); c.fillStyle = '#b5844e'; c.fillRect(-30, -7, 60, 8); c.fillRect(-4, -8, 8, 31); if (opened) { c.fillStyle = '#4a3030'; c.fillRect(-28, -24, 56, 17); } c.restore(); c.shadowBlur = 0;
+    const c = this.ctx; c.save(); c.translate(x, y); const sprite = opened ? this.art.chestOpen : this.art.chestClosed;
+    if (imageReady(sprite)) {
+      const width = opened ? 78 : 70; const height = width * sprite.naturalHeight / sprite.naturalWidth;
+      c.shadowColor = opened ? '#6d5b42' : '#a56738'; c.shadowBlur = opened ? 0 : 8 + Math.sin(time * 3) * 2; c.drawImage(sprite, -width / 2, 29 - height, width, height);
+    } else {
+      c.fillStyle = '#07081188'; c.beginPath(); c.ellipse(4, 18, 32, 13, 0, 0, Math.PI * 2); c.fill(); c.shadowColor = opened ? '#6d5b42' : '#d9a758'; c.shadowBlur = opened ? 0 : 10 + Math.sin(time * 3) * 3; c.fillStyle = opened ? '#392a29' : '#704836'; c.fillRect(-28, -4, 56, 27); c.fillStyle = '#b5844e'; c.fillRect(-30, -7, 60, 8); c.fillRect(-4, -8, 8, 31); if (opened) { c.fillStyle = '#4a3030'; c.fillRect(-28, -24, 56, 17); }
+    }
+    c.restore(); c.shadowBlur = 0;
   }
 
   private hazards(state: RenderState): void {
@@ -213,16 +260,6 @@ export class Renderer {
     c.globalAlpha = 1; c.textAlign = 'center';
     for (const t of state.texts) { c.globalAlpha = clamp(t.life / t.maxLife, 0, 1); c.fillStyle = t.color; c.font = `800 ${t.size}px Inter, sans-serif`; c.strokeStyle = '#070810'; c.lineWidth = 3; c.strokeText(t.text, t.x, t.y); c.fillText(t.text, t.x, t.y); }
     c.globalAlpha = 1;
-  }
-
-  private minimap(state: RenderState): void {
-    const c = this.ctx; const visible = [...state.rooms.values()].filter(r => r.visited || r.id === state.room.id || Object.values(state.room.connections).includes(r.id));
-    const xs = visible.map(r => r.gx); if (!xs.length) return;
-    const centerX = 875; const centerY = 100; const scale = 18; c.save(); c.globalAlpha = .92;
-    const frame = c.createLinearGradient(815, 52, 935, 148); frame.addColorStop(0, '#29251fdd'); frame.addColorStop(1, '#0b0b09e8'); c.fillStyle = frame; c.fillRect(815, 52, 120, 96);
-    c.strokeStyle = '#70665a'; c.lineWidth = 2; c.strokeRect(815.5, 52.5, 119, 95); c.strokeStyle = '#2c2822'; c.lineWidth = 1; c.strokeRect(820.5, 57.5, 109, 85);
-    for (const r of visible) { const x = centerX + (r.gx - state.room.gx) * scale; const y = centerY + (r.gy - state.room.gy) * scale; c.fillStyle = r.id === state.room.id ? '#edc77d' : r.state === 'cleared' ? '#718b7b' : '#514b45'; c.fillRect(x - 6, y - 5, 12, 10); c.strokeStyle = r.id === state.room.id ? '#7f4f2f' : '#211e1b'; c.strokeRect(x - 6.5, y - 5.5, 13, 11); if (r.kind === 'boss' && r.visited) { c.fillStyle = '#d75865'; c.fillRect(x - 2, y - 2, 4, 4); } }
-    c.restore();
   }
 
   private intro(state: RenderState): void {

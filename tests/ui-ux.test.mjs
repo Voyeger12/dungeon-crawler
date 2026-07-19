@@ -9,6 +9,8 @@ try {
   const { InputManager } = await server.ssrLoadModule('/src/input.ts');
   const { generateDungeon } = await server.ssrLoadModule('/src/dungeon.ts');
   const { HudView } = await server.ssrLoadModule('/src/hud.ts');
+  const { Game } = await server.ssrLoadModule('/src/game.ts');
+  const { XP_FOR_LEVEL } = await server.ssrLoadModule('/src/config.ts');
 
   const memory = new Map();
   globalThis.localStorage = {
@@ -32,7 +34,10 @@ try {
   migrated.resetTutorials();
   assert.equal(migrated.isTutorialComplete('move'), false, 'tutorial reset must clear persisted completion');
   migrated.completeTutorial('move');
-  assert.equal(JSON.parse(memory.get('rune-deep-save-v3')).version, 3, 'tutorial progress must persist in save version 3');
+  assert.equal(JSON.parse(memory.get('rune-deep-save-v4')).version, 4, 'tutorial progress must persist in save version 4');
+  assert.equal(migrated.settings.displayMode, 'fit', 'legacy saves must receive the safe browser-fit display mode');
+  assert.equal(migrated.settings.renderPreset, 'auto', 'legacy saves must receive automatic render sizing');
+  assert.equal(migrated.settings.uiScale, 100, 'legacy saves must receive the standard UI scale');
 
   const completed = new Set();
   const tutorialStore = {
@@ -137,8 +142,93 @@ try {
   const inactivePrevented = key('Space');
   assert.equal(inactivePrevented(), false, 'space must remain available to focused overlay controls');
   input.reset();
+  assert.equal(input.isNeutral('Space', 'Digit1', 'Digit2', 'Digit3'), false, 'reset must not disguise a physically held attack key as neutral');
+  input.onKeyUp({ code: 'Space' });
+  assert.equal(input.isNeutral('Space', 'Digit1', 'Digit2', 'Digit3'), true, 'the level-up gate should arm after the held key is released');
+  input.onGlobalPointerDown({ button: 0 }); input.reset();
+  assert.equal(input.isNeutral('Space', 'Digit1', 'Digit2', 'Digit3'), false, 'a held primary pointer anywhere in the overlay must keep choices locked');
+  input.onPointerUp({ button: 0 });
+  assert.equal(input.isNeutral('Space', 'Digit1', 'Digit2', 'Digit3'), true, 'releasing the pointer should arm choices without carrying a click');
+  key('Digit1'); assert.equal(input.consume('Digit1'), true, 'a fresh number-key press should be consumable once');
+  key('Digit1'); assert.equal(input.consume('Digit1'), false, 'key-repeat must not create a second level-up selection');
+  input.onKeyUp({ code: 'Digit1' });
   key('KeyC', { ctrlKey: true });
   assert.equal(input.isDown('KeyC'), false, 'browser/system shortcuts must not leak into gameplay');
+
+  const levelHarness = () => {
+    const game = Object.create(Game.prototype); const views = []; const states = []; const audioEvents = [];
+    let neutral = true; let cleared = 0; let focused = 0;
+    game.mode = 'running'; game.pendingLevels = []; game.pendingDefeat = false; game.endTimer = 0;
+    game.levelPhase = 'idle'; game.levelPhaseTime = 0; game.levelSelectionLocked = false; game.levelOptions = [];
+    game.player = {
+      x: 0, y: 0, hp: 100, maxHp: 120, damage: 24, attackRate: .42, speed: 205, dashCooldown: 1.35,
+      range: 78, critChance: .12, armor: 3, lifeSteal: 0, burnChance: 0, roomHeal: 0, dashShield: false,
+      level: 1, xp: 0, xpNeeded: XP_FOR_LEVEL(1), upgrades: []
+    };
+    game.input = {
+      reset() {}, isNeutral: () => neutral, consume: () => false
+    };
+    game.audio = {
+      captureScene: () => ({ scene: 'combat' }),
+      beginLevelUp: snapshot => audioEvents.push(['begin', snapshot.scene]),
+      playLevelUpFanfare: stacked => audioEvents.push(['fanfare', stacked]),
+      playLevelUpConfirm: () => audioEvents.push(['confirm']),
+      restoreScene: snapshot => audioEvents.push(['restore', snapshot.scene])
+    };
+    game.ui = {
+      showLevelUp: (options, level, state) => views.push({ level, state, ids: options.map(option => option.id) }),
+      setLevelUpState: (state, id) => states.push([state, id]), toast() {}, clearOverlay: () => { cleared++; }
+    };
+    game.tutorial = { queue() {} }; game.canvas = { focus: () => { focused++; } };
+    return { game, views, states, audioEvents, setNeutral: value => { neutral = value; }, cleared: () => cleared, focused: () => focused };
+  };
+
+  {
+    const h = levelHarness();
+    h.game.gainXp(XP_FOR_LEVEL(1) + XP_FOR_LEVEL(2));
+    assert.equal(h.game.mode, 'running', 'XP thresholds must only queue rewards during the simulation tick');
+    assert.deepEqual(h.game.pendingLevels.map(reward => reward.level), [2, 3], 'multi-level rewards need their exact reached levels');
+    assert.equal(h.game.resolveLevelUpEvent(), true, 'the safe tick-end resolver should open a queued reward');
+    assert.deepEqual(h.views.map(view => view.level), [2], 'the first queued level must be presented first');
+
+    h.setNeutral(false); h.game.updateLevelUp(.8);
+    assert.equal(h.game.levelPhase, 'intro', 'held attack or selection input must keep the intro locked after 700 ms');
+    h.setNeutral(true); h.game.updateLevelUp(0);
+    assert.equal(h.game.levelPhase, 'choosing', 'released controls should arm the three choices after the intro');
+
+    const firstChoice = h.game.levelOptions[0].id;
+    h.game.chooseUpgrade(firstChoice); h.game.chooseUpgrade(firstChoice);
+    assert.equal(h.game.player.upgrades.length, 1, 'double click/re-entrant commits must apply exactly one upgrade');
+    assert.equal(h.game.pendingLevels.length, 1, 'an atomic commit must remove exactly one queued level');
+    h.game.updateLevelUp(.23);
+    assert.deepEqual(h.views.map(view => view.level), [2, 3], 'stacked rewards must advance to the next exact level');
+
+    h.game.updateLevelUp(.71); const secondChoice = h.game.levelOptions[0].id; h.game.chooseUpgrade(secondChoice);
+    h.game.updateLevelUp(.23); h.game.updateLevelUp(.19);
+    assert.equal(h.game.player.upgrades.length, 2, 'every stacked level should grant exactly one committed upgrade');
+    assert.equal(h.game.mode, 'running', 'the short exit phase must return to the run');
+    assert.deepEqual(h.audioEvents.at(-1), ['restore', 'combat'], 'the pre-level-up audio scene must be restored');
+    assert.equal(h.cleared(), 1, 'the level overlay should clear once after the final reward');
+    assert.equal(h.focused(), 1, 'gameplay focus should return to the canvas');
+  }
+
+  {
+    const defeat = levelHarness(); const results = [];
+    defeat.game.gainXp(XP_FOR_LEVEL(1)); defeat.game.pendingDefeat = true;
+    defeat.game.finish = victory => { results.push(victory); defeat.game.mode = 'ending'; };
+    assert.equal(defeat.game.resolveTerminalEvents(.016), true);
+    assert.deepEqual(results, [false], 'death must win over a queued level-up');
+    assert.equal(defeat.game.pendingLevels.length, 0, 'terminal events must discard unusable level rewards');
+    assert.equal(defeat.views.length, 0, 'death must not flash a level-up dialog');
+
+    const victory = levelHarness(); const victoryResults = [];
+    victory.game.gainXp(XP_FOR_LEVEL(1)); victory.game.endTimer = .01;
+    victory.game.finish = won => { victoryResults.push(won); victory.game.mode = 'ending'; };
+    assert.equal(victory.game.resolveTerminalEvents(.016), true);
+    assert.deepEqual(victoryResults, [true], 'boss victory must win over a queued level-up');
+    assert.equal(victory.views.length, 0, 'boss victory must not open a redundant reward dialog');
+  }
+
   assert.deepEqual(defaultSettings.tutorialHints, true);
 
   console.log('UI, input, tutorial, and storage tests passed.');
