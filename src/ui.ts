@@ -7,11 +7,12 @@ import type { StorageManager } from './storage';
 
 export interface UIActions {
   startRun(): void; resume(): void; restart(): void; mainMenu(): void;
-  chooseUpgrade(id: string): void; openCharacter(origin: 'running' | 'paused'): void;
+  chooseUpgrade(id: string): void; rerollUpgrades(): void; openCharacter(origin: 'running' | 'paused'): void;
   openSettings(origin: 'menu' | 'paused'): void; closeModal(): void; resetTutorials(): void;
 }
 
-export type LevelUpViewState = 'intro' | 'choosing' | 'committed' | 'exit';
+export type LevelUpViewState = 'intro' | 'choosing' | 'rerolling' | 'revealing' | 'committed' | 'exit';
+export interface LevelRerollView { gold: number; cost: number; affordable: boolean }
 
 const controls = `
   <div class="controls-grid">
@@ -75,7 +76,7 @@ export class UI {
     const upgrades = player.upgrades.map(id => UPGRADES.find(u => u.id === id)).filter(Boolean);
     const relics = player.relics.map(id => RELICS.find(r => r.id === id)).filter(Boolean);
     this.root.innerHTML = `<section class="screen dim character-screen"><div id="character-dialog" class="panel character-panel codex-panel" role="dialog" aria-modal="true" aria-labelledby="character-title" aria-describedby="character-hint" tabindex="-1">
-      <header class="character-header"><div><p class="eyebrow">RUNENTRÄGER</p><h2 id="character-title">Charakter</h2></div><dl class="character-summary"><div><dt>Stufe</dt><dd>${player.level}</dd></div><div><dt>Leben</dt><dd>${Math.ceil(player.hp)} / ${player.maxHp} LP</dd></div><div><dt>Gold</dt><dd>${player.gold}</dd></div><div><dt>Heiltränke</dt><dd>${player.potions}</dd></div><div><dt>Runenschlüssel</dt><dd>${player.keys}</dd></div></dl><p class="resource-note">Gold erhöht deine Endwertung.</p></header>
+      <header class="character-header"><div><p class="eyebrow">RUNENTRÄGER</p><h2 id="character-title">Charakter</h2></div><dl class="character-summary"><div><dt>Stufe</dt><dd>${player.level}</dd></div><div><dt>Leben</dt><dd>${Math.ceil(player.hp)} / ${player.maxHp} LP</dd></div><div><dt>Gold</dt><dd>${player.gold}</dd></div><div><dt>Heiltränke</dt><dd>${player.potions}</dd></div><div><dt>Runenschlüssel</dt><dd>${player.keys}</dd></div></dl><p class="resource-note">Gold schmiedet beim Stufenaufstieg neue Runensegen und erhöht deine Endwertung.</p></header>
       <div class="character-columns"><section class="codex-section"><h3>Werte</h3><dl class="stat-grid">${stats.map(([a,b]) => `<div><dt>${a}</dt><dd>${b}</dd></div>`).join('')}</dl></section>
       <section class="codex-section"><h3>Runensegen</h3><ul class="item-list">${upgrades.length ? upgrades.map(u => `<li><i aria-hidden="true">${u!.icon}</i><b>${u!.name}</b><small>${u!.description}</small></li>`).join('') : '<li class="empty">Noch keine Runensegen.</li>'}</ul></section>
       <section class="codex-section"><h3>Relikte</h3><ul class="item-list">${relics.length ? relics.map(r => `<li style="--item:${r!.color}"><i aria-hidden="true">${r!.icon}</i><b>${r!.name}</b><small>${r!.description}</small></li>`).join('') : '<li class="empty">Noch keine Relikte gefunden.</li>'}</ul></section></div>
@@ -84,24 +85,78 @@ export class UI {
     this.focusDialog('#character-dialog');
   }
 
-  showLevelUp(options: typeof UPGRADES[number][], level: number, state: LevelUpViewState = 'intro'): void {
+  showLevelUp(options: typeof UPGRADES[number][], level: number, state: LevelUpViewState, reroll: LevelRerollView): void {
     this.setGameInert(true); this.hudView.hideTransient();
     this.currentOverlay = 'level';
     const locked = state !== 'choosing';
-    this.root.innerHTML = `<section id="level-dialog" class="screen dim level-screen" data-state="${state}" data-level="${level}" role="dialog" aria-modal="true" aria-labelledby="level-title" aria-describedby="level-hint" tabindex="-1"><div class="level-burst"></div><header class="level-heading"><p class="eyebrow">STUFE ${level} ERREICHT</p><h2 id="level-title">Wähle einen Runensegen</h2></header><div class="upgrade-cards">${options.map((u, i) => `<button type="button" class="upgrade-card" data-id="${u.id}" data-index="${i}" data-state="${locked ? 'locked' : 'available'}" aria-disabled="${locked}" ${locked ? 'disabled' : ''}><small>${i + 1}</small><i aria-hidden="true">${u.icon}</i><b>${u.name}</b><span>${u.description}</span></button>`).join('')}</div><p id="level-hint" class="small">Löse Angriff und Zahlentasten – dann wähle bewusst einen von drei Segen.</p></section>`;
-    this.root.querySelectorAll<HTMLButtonElement>('.upgrade-card').forEach(button => button.addEventListener('click', () => this.actions.chooseUpgrade(button.dataset.id!)));
+    this.root.innerHTML = `<section id="level-dialog" class="screen dim level-screen" data-state="${state}" data-level="${level}" data-reduced-effects="${this.store.settings.reducedEffects}" role="dialog" aria-modal="true" aria-labelledby="level-title" aria-describedby="level-hint level-reroll-feedback" tabindex="-1"><div class="level-burst"></div><header class="level-heading"><p class="eyebrow">STUFE ${level} ERREICHT</p><h2 id="level-title">Wähle einen Runensegen</h2></header><div class="upgrade-cards">${this.levelCardsMarkup(options, locked)}</div>${this.levelRerollMarkup(reroll, locked)}<p id="level-hint" class="small">Löse Angriff und Zahlentasten – dann wähle mit <kbd>1</kbd>–<kbd>3</kbd> oder schmiede mit <kbd>R</kbd> das Schicksal neu.</p></section>`;
+    this.bindLevelCardActions(); this.bindLevelRerollAction();
     this.focusDialog('#level-dialog');
+  }
+
+  replaceLevelUpOptions(options: typeof UPGRADES[number][]): void {
+    const cards = this.root.querySelector<HTMLElement>('.upgrade-cards');
+    if (!cards || this.currentOverlay !== 'level') return;
+    cards.innerHTML = this.levelCardsMarkup(options, true); this.bindLevelCardActions();
+  }
+
+  updateLevelReroll(view: LevelRerollView, locked = false): void {
+    const button = this.root.querySelector<HTMLButtonElement>('#level-reroll');
+    if (!button || this.currentOverlay !== 'level') return;
+    const gold = this.root.querySelector<HTMLElement>('#level-gold'); const price = this.root.querySelector<HTMLElement>('#level-reroll-price');
+    if (gold) gold.textContent = view.gold.toString(); if (price) price.textContent = view.cost.toString();
+    button.dataset.affordable = String(view.affordable); button.dataset.state = locked ? 'locked' : view.affordable ? 'available' : 'poor';
+    button.disabled = locked; button.setAttribute('aria-disabled', String(locked || !view.affordable));
+    button.title = view.affordable ? `Drei neue Runensegen für ${view.cost} Gold` : 'Die Münzen reichen nicht, um das Schicksal zu beugen.';
+    if (!locked) this.setLevelRerollFeedback(view.affordable ? 'Jeder weitere Ruf an die Runen wird kostspieliger.' : 'Berühre die Rune, um ihren Preis zu erfahren.', false);
+  }
+
+  showLevelRerollMessage(message: string): void {
+    this.setLevelRerollFeedback(message, true); this.hudView.announceAlert(message);
   }
 
   setLevelUpState(state: LevelUpViewState, selectedId?: string): void {
     const dialog = this.root.querySelector<HTMLElement>('#level-dialog'); if (!dialog || this.currentOverlay !== 'level') return;
     dialog.dataset.state = state;
+    const enabled = state === 'choosing';
     dialog.querySelectorAll<HTMLButtonElement>('.upgrade-card').forEach(button => {
-      const selected = Boolean(selectedId && button.dataset.id === selectedId); const enabled = state === 'choosing';
+      const selected = Boolean(selectedId && button.dataset.id === selectedId);
       button.disabled = !enabled; button.setAttribute('aria-disabled', String(!enabled));
       button.dataset.state = selected ? 'selected' : enabled ? 'available' : 'locked';
       button.classList.toggle('selected', selected); button.toggleAttribute('aria-pressed', selected);
     });
+    const reroll = dialog.querySelector<HTMLButtonElement>('#level-reroll');
+    if (reroll) {
+      const affordable = reroll.dataset.affordable === 'true'; reroll.disabled = !enabled;
+      reroll.setAttribute('aria-disabled', String(!enabled || !affordable)); reroll.dataset.state = enabled ? affordable ? 'available' : 'poor' : 'locked';
+    }
+  }
+
+  private levelCardsMarkup(options: typeof UPGRADES[number][], locked: boolean): string {
+    return options.map((u, i) => `<button type="button" class="upgrade-card" data-id="${u.id}" data-index="${i}" data-state="${locked ? 'locked' : 'available'}" aria-disabled="${locked}" ${locked ? 'disabled' : ''}><small>${i + 1}</small><i aria-hidden="true">${u.icon}</i><b>${u.name}</b><span>${u.description}</span></button>`).join('');
+  }
+
+  private levelRerollMarkup(view: LevelRerollView, locked: boolean): string {
+    const unavailable = locked || !view.affordable;
+    return `<div class="level-reroll"><div class="level-wallet" aria-label="${view.gold} Gold"><span aria-hidden="true">◈</span><b id="level-gold">${view.gold}</b><small>Gold</small></div><button id="level-reroll" type="button" data-affordable="${view.affordable}" data-state="${locked ? 'locked' : view.affordable ? 'available' : 'poor'}" aria-disabled="${unavailable}" ${locked ? 'disabled' : ''} title="${view.affordable ? `Drei neue Runensegen für ${view.cost} Gold` : 'Die Münzen reichen nicht, um das Schicksal zu beugen.'}"><i class="fate-rune" aria-hidden="true">ᚱ</i><span>Schicksal neu schmieden</span><strong><i aria-hidden="true">◈</i> <span id="level-reroll-price">${view.cost}</span></strong><kbd>R</kbd></button><p id="level-reroll-feedback" aria-live="polite">Jeder weitere Ruf an die Runen wird kostspieliger.</p></div>`;
+  }
+
+  private bindLevelCardActions(): void {
+    this.root.querySelectorAll<HTMLButtonElement>('.upgrade-card').forEach(button => button.addEventListener('click', () => this.actions.chooseUpgrade(button.dataset.id!)));
+  }
+
+  private bindLevelRerollAction(): void {
+    const button = this.root.querySelector<HTMLButtonElement>('#level-reroll'); if (!button) return;
+    button.addEventListener('click', () => this.actions.rerollUpgrades());
+    const showPoorHint = () => {
+      if (!button.disabled && button.dataset.affordable !== 'true') this.setLevelRerollFeedback('Die Münzen reichen nicht, um das Schicksal zu beugen.', true);
+    };
+    button.addEventListener('pointerenter', showPoorHint); button.addEventListener('focus', showPoorHint);
+  }
+
+  private setLevelRerollFeedback(message: string, danger: boolean): void {
+    const feedback = this.root.querySelector<HTMLElement>('#level-reroll-feedback'); if (!feedback) return;
+    feedback.textContent = message; feedback.classList.toggle('danger', danger);
   }
 
   showMap(mapHtml: string): void {

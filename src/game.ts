@@ -4,22 +4,25 @@ import { generateDungeon, oppositeDirection } from './dungeon';
 import { InputManager } from './input';
 import type { HudContext, HudState } from './hud';
 import { buildMapViewModel, renderMapViewMarkup } from './map-view';
-import { angleDiff, circleHit, clamp, dist, normalize, pick, rand, randi, shuffle, type Vec } from './math';
+import { angleDiff, circleHit, clamp, dist, normalize, pick, rand, randi, type Vec } from './math';
 import type { Direction, Enemy, EnemyKind, FloatText, Hazard, Particle, Pickup, Player, Projectile, Room, RunStats } from './model';
 import { Renderer } from './renderer';
 import { StorageManager } from './storage';
 import { TutorialController } from './tutorial';
 import { UI, type UIActions } from './ui';
+import { createUpgradeOffers, getRerollCost, REROLL_FAILURE_MESSAGE } from './upgrade-offers';
 
 type Mode = 'menu' | 'running' | 'paused' | 'level' | 'character' | 'map' | 'settings' | 'ending';
 type ModalOrigin = 'running' | 'paused' | 'menu';
-type LevelPhase = 'idle' | 'intro' | 'choosing' | 'committed' | 'exit';
-type LevelReward = { level: number; options: typeof UPGRADES[number][] };
+type LevelPhase = 'idle' | 'intro' | 'choosing' | 'rerolling' | 'committed' | 'exit';
+type LevelReward = { level: number };
 const INTERACT_RANGE = 70;
 const LEVEL_INTRO_TIME = .7;
 const LEVEL_COMMIT_TIME = .22;
 const LEVEL_EXIT_TIME = .18;
-const LEVEL_SELECTION_INPUTS = ['Space', 'Digit1', 'Digit2', 'Digit3'] as const;
+const LEVEL_REROLL_SWAP_TIME = .22;
+const LEVEL_REROLL_END_TIME = .48;
+const LEVEL_SELECTION_INPUTS = ['Space', 'Digit1', 'Digit2', 'Digit3', 'KeyR'] as const;
 
 export class Game implements UIActions {
   private renderer: Renderer;
@@ -51,6 +54,9 @@ export class Game implements UIActions {
   private endTimer = 0;
   private nextId = 1;
   private levelOptions: typeof UPGRADES[number][] = [];
+  private pendingRerollOptions: typeof UPGRADES[number][] = [];
+  private levelRerollCount = 0;
+  private levelRerollSwapped = false;
   private modalOrigin: ModalOrigin = 'running';
 
   constructor(private canvas: HTMLCanvasElement, private store: StorageManager) {
@@ -98,7 +104,28 @@ export class Game implements UIActions {
     this.levelSelectionLocked = true; this.levelPhase = 'committed'; this.levelPhaseTime = 0;
     this.ui.setLevelUpState('committed', upgrade.id); this.audio.playLevelUpConfirm();
     this.applyUpgrade(upgrade.id); this.player.upgrades.push(upgrade.id); this.tutorial.queue('character'); this.ui.toast(`${upgrade.icon} ${upgrade.name}`, 'good');
-    this.pendingLevels.shift();
+    this.pendingLevels.shift(); this.levelRerollCount = 0; this.pendingRerollOptions = [];
+  }
+
+  rerollUpgrades(): void {
+    if (this.mode !== 'level' || this.levelPhase !== 'choosing' || this.levelSelectionLocked) return;
+    const cost = getRerollCost(this.levelRerollCount);
+    if (this.player.gold < cost) {
+      this.ui.showLevelRerollMessage(REROLL_FAILURE_MESSAGE);
+      this.audio.play('warning');
+      return;
+    }
+
+    const previousIds = this.levelOptions.map(upgrade => upgrade.id);
+    const nextOptions = createUpgradeOffers(this.player, previousIds);
+    if (nextOptions.length !== 3) {
+      this.ui.showLevelRerollMessage('Die Runen antworten nicht. Dein Gold bleibt unangetastet.');
+      return;
+    }
+
+    this.levelSelectionLocked = true; this.levelPhase = 'rerolling'; this.levelPhaseTime = 0; this.levelRerollSwapped = false;
+    this.pendingRerollOptions = nextOptions; this.player.gold -= cost; this.levelRerollCount++;
+    this.ui.setLevelUpState('rerolling'); this.ui.updateLevelReroll(this.levelRerollView(), true); this.audio.playLevelUpReroll();
   }
 
   private resetRun(): void {
@@ -116,7 +143,8 @@ export class Game implements UIActions {
     };
     this.stats = { startTime: performance.now(), elapsed: 0, kills: 0, goldFound: 0, roomsVisited: 1, potionsUsed: 0, damageDealt: 0, damageTaken: 0 };
     this.time = 0; this.roomIntro = 2.2; this.roomTransitionCd = .5; this.pendingLevels = []; this.pendingDefeat = false; this.endTimer = 0; this.nextId = 1;
-    this.levelOptions = []; this.levelPhase = 'idle'; this.levelPhaseTime = 0; this.levelSelectionLocked = false; this.levelAudioSnapshot = undefined; this.tutorial.beginRun();
+    this.levelOptions = []; this.pendingRerollOptions = []; this.levelRerollCount = 0; this.levelRerollSwapped = false;
+    this.levelPhase = 'idle'; this.levelPhaseTime = 0; this.levelSelectionLocked = false; this.levelAudioSnapshot = undefined; this.tutorial.beginRun();
     this.store.records.runs++; this.store.save();
   }
 
@@ -236,7 +264,7 @@ export class Game implements UIActions {
     const p = this.player; p.xp += amount;
     while (p.xp >= p.xpNeeded) {
       p.xp -= p.xpNeeded; p.level++; p.xpNeeded = XP_FOR_LEVEL(p.level);
-      this.pendingLevels.push({ level: p.level, options: shuffle(UPGRADES).slice(0, 3) });
+      this.pendingLevels.push({ level: p.level });
     }
   }
 
@@ -260,10 +288,16 @@ export class Game implements UIActions {
   private openLevelUp(stacked: boolean): void {
     const reward = this.pendingLevels[0]; if (!reward || this.mode === 'ending') return;
     this.mode = 'level'; this.levelPhase = 'intro'; this.levelPhaseTime = 0; this.levelSelectionLocked = false;
-    this.levelOptions = reward.options; this.input.reset();
+    this.levelRerollCount = 0; this.levelRerollSwapped = false; this.pendingRerollOptions = [];
+    this.levelOptions = createUpgradeOffers(this.player); this.input.reset();
     if (!stacked) { this.levelAudioSnapshot = this.audio.captureScene(); this.audio.beginLevelUp(this.levelAudioSnapshot); }
     else this.audio.playLevelUpFanfare(true);
-    this.ui.showLevelUp(this.levelOptions, reward.level, 'intro');
+    this.ui.showLevelUp(this.levelOptions, reward.level, 'intro', this.levelRerollView());
+  }
+
+  private levelRerollView(): { gold: number; cost: number; affordable: boolean } {
+    const cost = getRerollCost(this.levelRerollCount);
+    return { gold: this.player.gold, cost, affordable: this.player.gold >= cost };
   }
 
   private updateLevelUp(dt: number): void {
@@ -275,8 +309,20 @@ export class Game implements UIActions {
       return;
     }
     if (this.levelPhase === 'choosing') {
+      if (this.input.consume('KeyR')) { this.rerollUpgrades(); return; }
       const index = this.input.consume('Digit1') ? 0 : this.input.consume('Digit2') ? 1 : this.input.consume('Digit3') ? 2 : -1;
       if (index >= 0 && this.levelOptions[index]) this.chooseUpgrade(this.levelOptions[index].id);
+      return;
+    }
+    if (this.levelPhase === 'rerolling') {
+      this.levelPhaseTime += dt;
+      if (!this.levelRerollSwapped && this.levelPhaseTime >= LEVEL_REROLL_SWAP_TIME) {
+        this.levelRerollSwapped = true; this.levelOptions = this.pendingRerollOptions; this.pendingRerollOptions = [];
+        this.ui.replaceLevelUpOptions(this.levelOptions); this.ui.setLevelUpState('revealing');
+      }
+      if (this.levelPhaseTime < LEVEL_REROLL_END_TIME) return;
+      this.levelPhase = 'choosing'; this.levelPhaseTime = 0; this.levelSelectionLocked = false;
+      this.ui.setLevelUpState('choosing'); this.ui.updateLevelReroll(this.levelRerollView());
       return;
     }
     if (this.levelPhase === 'committed') {
@@ -290,7 +336,7 @@ export class Game implements UIActions {
       this.levelPhaseTime += dt; if (this.levelPhaseTime < LEVEL_EXIT_TIME) return;
       const snapshot = this.levelAudioSnapshot; this.levelAudioSnapshot = undefined;
       if (snapshot) this.audio.restoreScene(snapshot);
-      this.ui.clearOverlay(); this.mode = 'running'; this.levelPhase = 'idle'; this.levelOptions = [];
+      this.ui.clearOverlay(); this.mode = 'running'; this.levelPhase = 'idle'; this.levelOptions = []; this.pendingRerollOptions = []; this.levelRerollCount = 0;
       this.input.reset(); this.canvas.focus();
     }
   }

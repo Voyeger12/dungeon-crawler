@@ -160,6 +160,16 @@ export class AudioManager {
     this.tone(midi(72), now + .07, .32, .085 * this.settings.sfx, 'sine', this.master);
   }
 
+  playLevelUpReroll(): void {
+    if (!this.context || !this.master || this.settings.muted || this.settings.sfx <= 0) return;
+    const now = this.context.currentTime;
+    this.tone(midi(43), now, .16, .055 * this.settings.sfx, 'square', this.master);
+    this.tone(midi(55), now + .07, .24, .06 * this.settings.sfx, 'triangle', this.master);
+    this.tone(midi(62), now + .15, .32, .075 * this.settings.sfx, 'sine', this.master);
+    this.tone(midi(74), now + .23, .38, .05 * this.settings.sfx, 'sine', this.master);
+    this.play('gold');
+  }
+
   restoreScene(snapshot: AudioSnapshot = this.levelSnapshot ?? { scene: 'calm' }): void {
     this.levelSnapshot = undefined; this.scene = snapshot.scene; this.musicState = snapshot.scene;
     if (!this.context || !this.music || !this.musicFilter) return;
