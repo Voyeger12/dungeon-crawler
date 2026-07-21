@@ -7,10 +7,11 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "node tests/storm-rune.test.mjs && node tests/audio.test.mjs && node tests/ui-ux.test.mjs && node tests/display.test.mjs && node tests/map-view.test.mjs"
   },
   "devDependencies": {
     "typescript": "5.8.3",
-    "vite": "6.3.5"
+    "vite": "6.4.3"
   }
 }

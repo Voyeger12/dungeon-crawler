@@ -1,19 +1,31 @@
-import { AudioManager } from './audio';
+import { AudioManager, type AudioSnapshot } from './audio';
 import { ENEMY_STATS, PLAYER_BASE, RELICS, UPGRADES, WORLD, XP_FOR_LEVEL, type RelicId, type UpgradeId } from './config';
 import { generateDungeon, oppositeDirection } from './dungeon';
 import { InputManager } from './input';
+import type { HudContext, HudState } from './hud';
+import { buildMapViewModel, renderMapViewMarkup } from './map-view';
 import { angleDiff, circleHit, clamp, dist, normalize, pick, rand, randi, shuffle, type Vec } from './math';
 import type { Direction, Enemy, EnemyKind, FloatText, Hazard, Particle, Pickup, Player, Projectile, Room, RunStats } from './model';
 import { Renderer } from './renderer';
 import { StorageManager } from './storage';
+import { TutorialController } from './tutorial';
 import { UI, type UIActions } from './ui';
 
-type Mode = 'menu' | 'running' | 'paused' | 'level' | 'character' | 'map' | 'ending';
+type Mode = 'menu' | 'running' | 'paused' | 'level' | 'character' | 'map' | 'settings' | 'ending';
+type ModalOrigin = 'running' | 'paused' | 'menu';
+type LevelPhase = 'idle' | 'intro' | 'choosing' | 'committed' | 'exit';
+type LevelReward = { level: number; options: typeof UPGRADES[number][] };
+const INTERACT_RANGE = 70;
+const LEVEL_INTRO_TIME = .7;
+const LEVEL_COMMIT_TIME = .22;
+const LEVEL_EXIT_TIME = .18;
+const LEVEL_SELECTION_INPUTS = ['Space', 'Digit1', 'Digit2', 'Digit3'] as const;
 
 export class Game implements UIActions {
   private renderer: Renderer;
   private input: InputManager;
   private audio: AudioManager;
+  private tutorial: TutorialController;
   private ui: UI;
   private mode: Mode = 'menu';
   private player!: Player;
@@ -30,15 +42,22 @@ export class Game implements UIActions {
   private lastTime = 0;
   private roomIntro = 0;
   private roomTransitionCd = 0;
-  private pendingLevels = 0;
+  private pendingLevels: LevelReward[] = [];
+  private levelPhase: LevelPhase = 'idle';
+  private levelPhaseTime = 0;
+  private levelSelectionLocked = false;
+  private levelAudioSnapshot?: AudioSnapshot;
+  private pendingDefeat = false;
   private endTimer = 0;
   private nextId = 1;
   private levelOptions: typeof UPGRADES[number][] = [];
+  private modalOrigin: ModalOrigin = 'running';
 
   constructor(private canvas: HTMLCanvasElement, private store: StorageManager) {
     this.renderer = new Renderer(canvas);
     this.audio = new AudioManager(store.settings);
-    this.input = new InputManager(canvas, () => { if (this.mode === 'running') this.pause(); });
+    this.tutorial = new TutorialController(store);
+    this.input = new InputManager(canvas, () => { if (this.mode === 'running') this.pause(); }, () => this.mode === 'running');
     this.ui = new UI(store, this);
     window.addEventListener('rune-settings', () => this.audio.applySettings(this.store.settings));
     this.ui.showStart(); requestAnimationFrame(this.loop);
@@ -48,15 +67,38 @@ export class Game implements UIActions {
     this.audio.start(); this.resetRun(); this.mode = 'running'; this.ui.beginGame(); this.canvas.focus();
   }
 
-  restart(): void { this.audio.start(); this.resetRun(); this.mode = 'running'; this.ui.beginGame(); }
-  resume(): void { if (!this.player) return; this.ui.clearOverlay(); this.mode = 'running'; this.input.reset(); }
-  mainMenu(): void { this.mode = 'menu'; this.enemies = []; this.projectiles = []; this.hazards = []; this.input.reset(); this.ui.showStart(); }
+  restart(): void { this.audio.start(); this.resetRun(); this.mode = 'running'; this.ui.beginGame(); this.input.reset(); this.canvas.focus(); }
+  resume(): void { if (!this.player) return; this.ui.clearOverlay(); this.mode = 'running'; this.input.reset(); this.canvas.focus(); }
+  mainMenu(): void { this.mode = 'menu'; this.audio.setMusicState('calm'); this.enemies = []; this.projectiles = []; this.hazards = []; this.input.reset(); this.ui.showStart(); }
+
+  openCharacter(origin: 'running' | 'paused'): void {
+    if (!this.player || (this.mode !== 'running' && this.mode !== 'paused')) return;
+    this.modalOrigin = origin; this.mode = 'character'; this.input.reset(); this.tutorial.complete('character'); this.ui.showCharacter(this.player);
+  }
+
+  openSettings(origin: 'menu' | 'paused'): void {
+    if (origin === 'paused' && !this.player) return;
+    this.modalOrigin = origin; this.mode = 'settings'; this.input.reset(); this.ui.showSettings();
+  }
+
+  closeModal(): void {
+    if (this.mode === 'character' || this.mode === 'map' || this.mode === 'settings') {
+      const closedMode = this.mode; const origin = this.modalOrigin; this.input.reset();
+      if (origin === 'running') this.resume();
+      else if (origin === 'paused' && this.player) { this.mode = 'paused'; this.ui.showPause(this.player, closedMode === 'character'); }
+      else { this.mode = 'menu'; this.ui.showStart(); }
+    }
+  }
+
+  resetTutorials(): void { this.store.resetTutorials(); this.tutorial.suspendUntilNextRun(); }
 
   chooseUpgrade(id: string): void {
-    const upgrade = UPGRADES.find(item => item.id === id); if (!upgrade) return;
-    this.applyUpgrade(upgrade.id); this.player.upgrades.push(upgrade.id); this.ui.toast(`${upgrade.icon} ${upgrade.name}`, 'good');
-    this.pendingLevels--;
-    if (this.pendingLevels > 0) window.setTimeout(() => this.openLevelUp(), 120); else this.resume();
+    if (this.mode !== 'level' || this.levelPhase !== 'choosing' || this.levelSelectionLocked) return;
+    const upgrade = this.levelOptions.find(item => item.id === id); if (!upgrade) return;
+    this.levelSelectionLocked = true; this.levelPhase = 'committed'; this.levelPhaseTime = 0;
+    this.ui.setLevelUpState('committed', upgrade.id); this.audio.playLevelUpConfirm();
+    this.applyUpgrade(upgrade.id); this.player.upgrades.push(upgrade.id); this.tutorial.queue('character'); this.ui.toast(`${upgrade.icon} ${upgrade.name}`, 'good');
+    this.pendingLevels.shift();
   }
 
   private resetRun(): void {
@@ -73,13 +115,14 @@ export class Game implements UIActions {
       burnChance: 0, dashShield: false, damageBuff: 0, speedBuff: 0
     };
     this.stats = { startTime: performance.now(), elapsed: 0, kills: 0, goldFound: 0, roomsVisited: 1, potionsUsed: 0, damageDealt: 0, damageTaken: 0 };
-    this.time = 0; this.roomIntro = 2.2; this.roomTransitionCd = .5; this.pendingLevels = 0; this.endTimer = 0; this.nextId = 1;
+    this.time = 0; this.roomIntro = 2.2; this.roomTransitionCd = .5; this.pendingLevels = []; this.pendingDefeat = false; this.endTimer = 0; this.nextId = 1;
+    this.levelOptions = []; this.levelPhase = 'idle'; this.levelPhaseTime = 0; this.levelSelectionLocked = false; this.levelAudioSnapshot = undefined; this.tutorial.beginRun();
     this.store.records.runs++; this.store.save();
   }
 
   private loop = (now: number) => {
     const dt = Math.min(.033, Math.max(0, (now - this.lastTime) / 1000 || 0)); this.lastTime = now;
-    if (this.mode === 'running') this.update(dt); else this.handleOverlayKeys();
+    if (this.mode === 'running') this.update(dt); else if (this.mode === 'level') this.updateLevelUp(dt); else this.handleOverlayKeys();
     if (this.player && this.room && this.mode !== 'menu') this.renderer.render({
       room: this.room, rooms: this.rooms, player: this.player, enemies: this.enemies, projectiles: this.projectiles,
       pickups: this.pickups, hazards: this.hazards, particles: this.particles, texts: this.texts, time: this.time,
@@ -89,24 +132,25 @@ export class Game implements UIActions {
   };
 
   private handleOverlayKeys(): void {
-    if (this.mode === 'paused' && this.input.consume('Escape')) this.resume();
-    else if (this.mode === 'character' && (this.input.consume('KeyI') || this.input.consume('Escape'))) this.resume();
-    else if (this.mode === 'map' && (this.input.consume('KeyM') || this.input.consume('Escape'))) this.resume();
+    if (this.mode === 'paused' && this.input.consumeAny('KeyC', 'KeyI')) this.openCharacter('paused');
+    else if (this.mode === 'paused' && this.input.consume('Escape')) this.resume();
+    else if (this.mode === 'character' && this.input.consumeAny('KeyC', 'KeyI', 'Escape')) this.closeModal();
+    else if (this.mode === 'map' && this.input.consumeAny('KeyM', 'Escape')) this.closeModal();
+    else if (this.mode === 'settings' && this.input.consume('Escape')) this.closeModal();
     else if (this.mode === 'ending' && this.input.consume('KeyR')) this.restart();
-    else if (this.mode === 'level') {
-      const index = this.input.consume('Digit1') ? 0 : this.input.consume('Digit2') ? 1 : this.input.consume('Digit3') ? 2 : -1;
-      if (index >= 0 && this.levelOptions[index]) this.chooseUpgrade(this.levelOptions[index].id);
-    }
   }
 
   private update(dt: number): void {
     this.time += dt; this.stats.elapsed += dt; this.roomIntro = Math.max(0, this.roomIntro - dt); this.roomTransitionCd = Math.max(0, this.roomTransitionCd - dt);
     if (this.input.consume('Escape')) { this.pause(); return; }
-    if (this.input.consume('KeyI')) { this.mode = 'character'; this.ui.showCharacter(this.player); return; }
-    if (this.input.consume('KeyM')) { this.mode = 'map'; this.ui.showMap(this.buildMapHtml()); return; }
+    if (this.input.consumeAny('KeyC', 'KeyI')) { this.openCharacter('running'); return; }
+    if (this.input.consume('KeyM')) { this.modalOrigin = 'running'; this.mode = 'map'; this.input.reset(); this.tutorial.complete('map'); this.ui.showMap(this.buildMapHtml()); return; }
+    this.audio.setMusicState(this.room.kind === 'boss' && this.room.state === 'active' ? 'boss' : this.room.state === 'active' ? 'combat' : 'calm');
     this.updateTimers(dt); this.updatePlayer(dt); this.updateEnemies(dt); this.updateProjectiles(dt); this.updateHazards(dt); this.updatePickups(dt); this.updateEffects(dt);
-    this.checkRoomComplete(); this.checkTransition(); this.updateHud();
-    if (this.endTimer > 0) { this.endTimer -= dt; if (this.endTimer <= 0) this.finish(true); }
+    if (this.resolveTerminalEvents(dt)) return;
+    this.checkRoomComplete(); this.updateHud(dt);
+    if (this.resolveLevelUpEvent()) return;
+    this.checkTransition();
   }
 
   private updateTimers(dt: number): void {
@@ -116,14 +160,14 @@ export class Game implements UIActions {
   }
 
   private updatePlayer(dt: number): void {
-    const p = this.player; const move = this.input.movement(); p.aim = Math.atan2(this.input.mouse.y - p.y, this.input.mouse.x - p.x);
+    const p = this.player; const move = this.input.movement(); this.tutorial.trackMovement(dt, Boolean(move.x || move.y)); p.aim = Math.atan2(this.input.mouse.y - p.y, this.input.mouse.x - p.x);
     if (this.input.consume('ShiftLeft') || this.input.consume('ShiftRight')) this.tryDash(move);
     if (p.dashTimer > 0) {
-      this.moveCircle(p, p.dashDir.x * 590 * dt, p.dashDir.y * 590 * dt, p.radius);
+      p.vx = p.dashDir.x * 590; p.vy = p.dashDir.y * 590; this.moveCircle(p, p.vx * dt, p.vy * dt, p.radius);
       if (!this.store.settings.reducedEffects && Math.random() < .65) this.particle(p.x + rand(-8, 8), p.y + rand(-8, 8), '#70aac2', rand(-30, 30), rand(-30, 30), .24, rand(3, 7));
     } else {
-      const speed = p.speed * (p.speedBuff > 0 ? 1.3 : 1); this.moveCircle(p, move.x * speed * dt, move.y * speed * dt, p.radius);
-      if ((this.input.mouse.down || this.input.isDown('Space')) && p.attackTimer <= 0 && this.roomIntro < 1.75) this.attack();
+      const speed = p.speed * (p.speedBuff > 0 ? 1.3 : 1); p.vx = move.x * speed; p.vy = move.y * speed; this.moveCircle(p, p.vx * dt, p.vy * dt, p.radius);
+      if ((this.input.mouse.down || this.input.mouse.pressed || this.input.isDown('Space')) && p.attackTimer <= 0 && this.roomIntro < 1.75) this.attack();
     }
     if (this.input.consume('KeyQ')) this.usePotion();
     if (this.input.consume('KeyE')) this.interact();
@@ -136,24 +180,27 @@ export class Game implements UIActions {
     const p = this.player; if (p.dashCdTimer > 0 || p.dashTimer > 0) return;
     const direction = move.x || move.y ? move : { x: Math.cos(p.aim), y: Math.sin(p.aim) };
     p.dashDir = direction; p.dashTimer = p.dashDuration; p.dashCdTimer = p.dashCooldown; p.invuln = Math.max(p.invuln, p.dashDuration + .06);
-    if (p.dashShield) p.shield = Math.max(p.shield, 12); this.audio.play('dash'); this.burst(p.x, p.y, '#6db1c7', 9, 125); this.renderer.shake = 2;
+    if (p.dashShield) p.shield = Math.max(p.shield, 12); this.tutorial.complete('dash'); this.audio.play('dash'); this.burst(p.x, p.y, '#6db1c7', 9, 125); this.renderer.shake = 2;
   }
 
   private attack(): void {
-    const p = this.player; p.attackTimer = p.attackRate; p.attackAnim = .16; p.attackCombo = (p.attackCombo + 1) % 3; p.attackCount++; this.audio.play('slash');
-    const combo = p.attackCombo === 2; const range = p.range * (combo ? 1.15 : 1); const arc = combo ? 1.15 : .88; let hit = false;
-    for (const enemy of this.enemies) {
-      if (enemy.state === 'dead' || dist(p, enemy) > range + enemy.radius) continue;
-      const a = Math.atan2(enemy.y - p.y, enemy.x - p.x); if (Math.abs(angleDiff(a, p.aim)) > arc) continue;
+    const p = this.player; p.attackTimer = p.attackRate; p.attackAnim = .34; p.attackCombo = (p.attackCombo + 1) % 3; p.attackCount++; this.tutorial.complete('attack'); this.audio.play('slash');
+    const combo = p.attackCombo === 2; const range = p.range * (combo ? 1.15 : 1); const arc = combo ? 1.15 : .88;
+    const directTargets = this.enemies
+      .filter(enemy => enemy.state !== 'dead' && dist(p, enemy) <= range + enemy.radius && Math.abs(angleDiff(Math.atan2(enemy.y - p.y, enemy.x - p.x), p.aim)) <= arc)
+      .sort((a, b) => dist(p, a) - dist(p, b) || a.id - b.id);
+    const stormOrigin = directTargets[0];
+    for (const enemy of directTargets) {
       const crit = Math.random() < p.critChance; let damage = p.damage * (p.damageBuff > 0 ? 1.35 : 1) * (combo ? 1.28 : 1) * (crit ? p.critMultiplier : 1);
-      damage = Math.round(damage); this.damageEnemy(enemy, damage, crit, p.aim); hit = true;
+      damage = Math.round(damage); this.damageEnemy(enemy, damage, crit, p.aim);
     }
+    if (stormOrigin && this.hasRelic('storm-rune') && p.attackCount % 3 === 0) this.chainLightning(stormOrigin);
     for (const obstacle of this.room.obstacles) {
       if (!obstacle.breakable || obstacle.hp <= 0 || dist(p, obstacle) > range + obstacle.radius) continue;
       const a = Math.atan2(obstacle.y - p.y, obstacle.x - p.x); if (Math.abs(angleDiff(a, p.aim)) > arc) continue;
       obstacle.hp -= p.damage; this.burst(obstacle.x, obstacle.y, '#a87b56', 6, 90); if (obstacle.hp <= 0) this.breakObstacle(obstacle.x, obstacle.y);
     }
-    if (hit) { this.renderer.shake = combo ? 6 : 3; if (combo) this.renderer.flash = .05; }
+    if (directTargets.length > 0) { this.renderer.shake = combo ? 6 : 3; if (combo) this.renderer.flash = .05; }
   }
 
   private damageEnemy(enemy: Enemy, amount: number, crit: boolean, attackAngle?: number): void {
@@ -164,7 +211,6 @@ export class Game implements UIActions {
     const frost = this.hasRelic('frost-amulet'); if (frost) enemy.slow = Math.max(enemy.slow, 1.7);
     if (this.player.burnChance > 0 && Math.random() < this.player.burnChance) enemy.burn = Math.max(enemy.burn, 2.8);
     if (this.player.lifeSteal > 0) this.heal(amount * this.player.lifeSteal, false);
-    if (this.hasRelic('storm-rune') && this.player.attackCount % 3 === 0) this.chainLightning(enemy);
     if (enemy.hp <= 0) this.killEnemy(enemy);
   }
 
@@ -188,11 +234,66 @@ export class Game implements UIActions {
 
   private gainXp(amount: number): void {
     const p = this.player; p.xp += amount;
-    while (p.xp >= p.xpNeeded) { p.xp -= p.xpNeeded; p.level++; p.xpNeeded = XP_FOR_LEVEL(p.level); this.pendingLevels++; }
-    if (this.pendingLevels > 0 && this.mode === 'running') this.openLevelUp();
+    while (p.xp >= p.xpNeeded) {
+      p.xp -= p.xpNeeded; p.level++; p.xpNeeded = XP_FOR_LEVEL(p.level);
+      this.pendingLevels.push({ level: p.level, options: shuffle(UPGRADES).slice(0, 3) });
+    }
   }
 
-  private openLevelUp(): void { this.mode = 'level'; this.input.reset(); this.audio.play('level'); this.levelOptions = shuffle(UPGRADES).slice(0, 3); this.ui.showLevelUp(this.levelOptions, this.player.level); }
+  private resolveTerminalEvents(dt: number): boolean {
+    if (this.pendingDefeat || this.player.hp <= 0) {
+      this.pendingLevels = []; this.finish(false); return true;
+    }
+    if (this.endTimer > 0) {
+      this.pendingLevels = []; this.endTimer -= dt;
+      if (this.endTimer <= 0) this.finish(true);
+      return true;
+    }
+    return false;
+  }
+
+  private resolveLevelUpEvent(): boolean {
+    if (this.pendingLevels.length === 0) return false;
+    this.openLevelUp(false); return true;
+  }
+
+  private openLevelUp(stacked: boolean): void {
+    const reward = this.pendingLevels[0]; if (!reward || this.mode === 'ending') return;
+    this.mode = 'level'; this.levelPhase = 'intro'; this.levelPhaseTime = 0; this.levelSelectionLocked = false;
+    this.levelOptions = reward.options; this.input.reset();
+    if (!stacked) { this.levelAudioSnapshot = this.audio.captureScene(); this.audio.beginLevelUp(this.levelAudioSnapshot); }
+    else this.audio.playLevelUpFanfare(true);
+    this.ui.showLevelUp(this.levelOptions, reward.level, 'intro');
+  }
+
+  private updateLevelUp(dt: number): void {
+    if (this.levelPhase === 'intro') {
+      this.levelPhaseTime += dt;
+      if (this.levelPhaseTime >= LEVEL_INTRO_TIME && this.input.isNeutral(...LEVEL_SELECTION_INPUTS)) {
+        this.levelPhase = 'choosing'; this.levelPhaseTime = 0; this.ui.setLevelUpState('choosing');
+      }
+      return;
+    }
+    if (this.levelPhase === 'choosing') {
+      const index = this.input.consume('Digit1') ? 0 : this.input.consume('Digit2') ? 1 : this.input.consume('Digit3') ? 2 : -1;
+      if (index >= 0 && this.levelOptions[index]) this.chooseUpgrade(this.levelOptions[index].id);
+      return;
+    }
+    if (this.levelPhase === 'committed') {
+      this.levelPhaseTime += dt;
+      if (this.levelPhaseTime < LEVEL_COMMIT_TIME) return;
+      if (this.pendingLevels.length > 0) this.openLevelUp(true);
+      else { this.levelPhase = 'exit'; this.levelPhaseTime = 0; this.ui.setLevelUpState('exit'); }
+      return;
+    }
+    if (this.levelPhase === 'exit') {
+      this.levelPhaseTime += dt; if (this.levelPhaseTime < LEVEL_EXIT_TIME) return;
+      const snapshot = this.levelAudioSnapshot; this.levelAudioSnapshot = undefined;
+      if (snapshot) this.audio.restoreScene(snapshot);
+      this.ui.clearOverlay(); this.mode = 'running'; this.levelPhase = 'idle'; this.levelOptions = [];
+      this.input.reset(); this.canvas.focus();
+    }
+  }
 
   private applyUpgrade(id: UpgradeId): void {
     const p = this.player;
@@ -284,12 +385,12 @@ export class Game implements UIActions {
     p.hp -= damage; p.invuln = .72; p.flash = .15; this.stats.damageTaken += damage; this.floatText(p.x, p.y - 25, `-${damage}`, '#ff7581', 18); this.burst(p.x, p.y, '#e75567', 10, 155); this.audio.play('hurt'); this.renderer.shake = 8; this.renderer.flash = .08;
     const away = normalize({ x: p.x - source.x, y: p.y - source.y }); this.moveCircle(p, away.x * 18, away.y * 18, p.radius);
     if (this.hasRelic('thorn-crown') && 'hp' in source && source !== p) { const enemy = source as Enemy; if (enemy.state !== 'dead' && enemy.kind !== 'boss') this.damageEnemy(enemy, Math.round(damage * .25), false); }
-    if (p.hp <= 0) { p.hp = 0; this.finish(false); }
+    if (p.hp <= 0) { p.hp = 0; this.pendingDefeat = true; }
   }
 
   private usePotion(): void {
     const p = this.player; if (p.potions <= 0) { this.ui.toast('Keine Heiltränke', 'danger'); return; } if (p.hp >= p.maxHp) { this.ui.toast('Leben bereits voll'); return; }
-    p.potions--; this.stats.potionsUsed++; this.heal(42, true); this.audio.play('potion'); this.ui.toast('Heiltrank verwendet', 'good');
+    p.potions--; this.stats.potionsUsed++; this.heal(42, true); this.tutorial.complete('potion'); this.audio.play('potion'); this.ui.toast('Heiltrank verwendet', 'good');
   }
 
   private heal(amount: number, visible = true): void {
@@ -327,10 +428,10 @@ export class Game implements UIActions {
 
   private collect(pickup: Pickup): void {
     if (pickup.collected) return; pickup.collected = true; const p = this.player;
-    if (pickup.kind === 'gold') { p.gold += pickup.amount; this.stats.goldFound += pickup.amount; this.audio.play('gold'); this.floatText(p.x, p.y - 22, `+${pickup.amount} ◈`, '#f5cf67', 13); }
+    if (pickup.kind === 'gold') { p.gold += pickup.amount; this.stats.goldFound += pickup.amount; this.tutorial.queue('gold'); this.audio.play('gold'); this.floatText(p.x, p.y - 22, `+${pickup.amount} ◈`, '#f5cf67', 13); }
     else if (pickup.kind === 'heal') { this.heal(pickup.amount); this.audio.play('pickup'); }
     else if (pickup.kind === 'potion') { p.potions += pickup.amount; this.audio.play('pickup'); this.ui.toast('+1 Heiltrank', 'good'); }
-    else if (pickup.kind === 'key') { p.keys++; this.audio.play('pickup'); this.ui.toast('Runenschlüssel gefunden', 'good'); }
+    else if (pickup.kind === 'key') { p.keys++; this.tutorial.queue('key'); this.audio.play('pickup'); this.ui.toast('Runenschlüssel gefunden', 'good'); }
     else if (pickup.kind === 'damage') { p.damageBuff = Math.max(p.damageBuff, 20); this.audio.play('pickup'); this.ui.toast('Klingenrausch · 20s', 'good'); }
     else if (pickup.kind === 'speed') { p.speedBuff = Math.max(p.speedBuff, 20); this.audio.play('pickup'); this.ui.toast('Windsegen · 20s', 'good'); }
     else if (pickup.relic) this.addRelic(pickup.relic);
@@ -338,19 +439,19 @@ export class Game implements UIActions {
 
   private addRelic(id: RelicId): void {
     if (this.player.relics.includes(id)) { this.player.gold += 30; this.ui.toast('Reliktduplikat · +30 Gold', 'good'); return; }
-    this.player.relics.push(id); const relic = RELICS.find(r => r.id === id)!;
+    this.player.relics.push(id); this.tutorial.queue('character'); const relic = RELICS.find(r => r.id === id)!;
     if (id === 'blood-blade') this.player.lifeSteal += .03; if (id === 'guardian-ring') this.player.armor += 4;
     if (id === 'shadow-boots') this.player.dashCooldown *= .8; if (id === 'ember-core') this.player.burnChance = Math.max(this.player.burnChance, .35);
     this.audio.play('pickup'); this.ui.toast(`${relic.icon} ${relic.name}: ${relic.description}`, 'good'); this.renderer.flash = .08;
   }
 
   private interact(): void {
-    if (this.room.chest && !this.room.chest.opened && dist(this.player, this.room.chest) < 70) {
+    if (this.room.chest && !this.room.chest.opened && dist(this.player, this.room.chest) < INTERACT_RANGE) {
       if (this.room.chest.locked && this.player.keys <= 0) { this.ui.toast('Ein Runenschlüssel wird benötigt', 'danger'); return; }
-      if (this.room.chest.locked) this.player.keys--; this.room.chest.opened = true; this.room.rewardClaimed = true; this.audio.play('chest'); this.spawnRelic(this.room.chest.x, this.room.chest.y - 25); this.spawnPickup('gold', this.room.chest.x - 24, this.room.chest.y + 18, 25); this.spawnPickup(Math.random() < .5 ? 'damage' : 'speed', this.room.chest.x + 24, this.room.chest.y + 18, 1); return;
+      if (this.room.chest.locked) this.player.keys--; this.room.chest.opened = true; this.room.rewardClaimed = true; this.tutorial.complete('interact'); this.audio.play('chest'); this.spawnRelic(this.room.chest.x, this.room.chest.y - 25); this.spawnPickup('gold', this.room.chest.x - 24, this.room.chest.y + 18, 25); this.spawnPickup(Math.random() < .5 ? 'damage' : 'speed', this.room.chest.x + 24, this.room.chest.y + 18, 1); return;
     }
-    if (this.room.kind === 'rest' && !this.room.rewardClaimed && dist(this.player, { x: WORLD.width / 2, y: WORLD.height / 2 }) < 70) {
-      this.room.rewardClaimed = true; this.heal(this.player.maxHp * .45); this.player.potions++; this.audio.play('potion'); this.ui.toast('Die Zuflucht heilt deine Wunden', 'good'); return;
+    if (this.room.kind === 'rest' && !this.room.rewardClaimed && dist(this.player, { x: WORLD.width / 2, y: WORLD.height / 2 }) < INTERACT_RANGE) {
+      this.room.rewardClaimed = true; this.tutorial.complete('interact'); this.heal(this.player.maxHp * .45); this.player.potions++; this.audio.play('potion'); this.ui.toast('Die Zuflucht heilt deine Wunden', 'good'); return;
     }
     this.ui.toast('Nichts zum Interagieren');
   }
@@ -442,25 +543,50 @@ export class Game implements UIActions {
 
   private doorsOpen(): boolean { return this.room.state === 'cleared'; }
   private hasRelic(id: RelicId): boolean { return this.player.relics.includes(id); }
-  private pause(): void { if (this.mode !== 'running') return; this.mode = 'paused'; this.input.reset(); this.ui.showPause(this.player); }
+  private pause(): void { if (this.mode !== 'running') return; this.mode = 'paused'; this.audio.setMusicState('calm'); this.input.reset(); this.ui.showPause(this.player); }
 
-  private updateHud(): void {
+  private updateHud(dt: number): void {
     const alive = this.enemies.filter(e => e.state !== 'dead'); const boss = alive.find(e => e.kind === 'boss');
-    let objective = this.room.state === 'active' ? `${alive.length} ${alive.length === 1 ? 'Feind' : 'Feinde'} verbleiben` : this.room.kind === 'treasure' && !this.room.chest?.opened ? 'E · Truhe öffnen' : this.room.kind === 'rest' && !this.room.rewardClaimed ? 'E · Am Runenkreis rasten' : 'Türen geöffnet · Dungeon erkunden';
+    let objective = this.room.state === 'active' ? `${alive.length} ${alive.length === 1 ? 'Feind' : 'Feinde'} verbleiben` : this.room.kind === 'treasure' && !this.room.chest?.opened ? 'Die Schatztruhe wartet' : this.room.kind === 'rest' && !this.room.rewardClaimed ? 'Der Runenkreis spendet Kraft' : 'Türen geöffnet · Dungeon erkunden';
     if (boss) objective = boss.phase === 2 ? 'Phase II · Gebrochene Siegel' : 'Phase I · Der Wächter erwacht';
-    this.ui.updateHud(this.player, this.renderer.roomName(this.room), objective, boss);
+    const p = this.player; const context = this.contextHint();
+    if (context && context.tone !== 'danger') this.tutorial.queue('interact');
+    if (p.hp / Math.max(1, p.maxHp) <= .7 && p.potions > 0) this.tutorial.queue('potion');
+    const unexploredExits = Object.values(this.room.connections).filter(id => id && !this.rooms.get(id)?.visited).length;
+    if (this.room.state === 'cleared' && unexploredExits >= 2) this.tutorial.queue('map');
+    const tutorial = this.tutorial.update(dt, {
+      enabled: this.store.settings.tutorialHints, overlay: this.mode !== 'running' || this.endTimer > 0, boss: Boolean(boss), combat: this.room.state === 'active',
+      safe: this.room.state === 'cleared', interactable: Boolean(context && context.tone !== 'danger'), potionNeeded: p.hp / Math.max(1, p.maxHp) <= .7 && p.potions > 0
+    });
+    const state: HudState = {
+      hp: p.hp, maxHp: p.maxHp, xp: p.xp, xpNeeded: p.xpNeeded, level: p.level, gold: p.gold, keys: p.keys,
+      showKeys: p.keys > 0 || Boolean(this.room.chest?.locked), potions: p.potions, potionHeal: 42, dashRemaining: p.dashCdTimer,
+      dashCooldown: p.dashCooldown, roomName: this.renderer.roomName(this.room), objective, combat: this.room.state === 'active', context: tutorial?.id === 'interact' ? undefined : context, tutorial,
+      effects: [
+        ...(p.damageBuff > 0 ? [{ id: 'damage', label: 'Klingenrausch', value: `+35 % · ${Math.ceil(p.damageBuff)} s`, tone: 'damage' as const }] : []),
+        ...(p.speedBuff > 0 ? [{ id: 'speed', label: 'Windsegen', value: `+30 % · ${Math.ceil(p.speedBuff)} s`, tone: 'speed' as const }] : []),
+        ...(p.shield > 0 ? [{ id: 'shield', label: 'Runenschild', value: `${Math.ceil(p.shield)} Schutz`, tone: 'shield' as const }] : [])
+      ],
+      boss: boss ? { name: 'Der Runenwächter', hp: boss.hp, maxHp: boss.maxHp } : undefined
+    };
+    this.ui.updateHud(state);
+  }
+
+  private contextHint(): HudContext | undefined {
+    if (this.room.chest && !this.room.chest.opened && dist(this.player, this.room.chest) < INTERACT_RANGE) {
+      if (this.room.chest.locked && this.player.keys <= 0) return { key: 'E', text: 'Runenschlüssel benötigt', tone: 'danger' };
+      return { key: 'E', text: this.room.chest.locked ? 'Schatztruhe aufschließen' : 'Truhe öffnen' };
+    }
+    if (this.room.kind === 'rest' && !this.room.rewardClaimed && dist(this.player, { x: WORLD.width / 2, y: WORLD.height / 2 }) < INTERACT_RANGE) return { key: 'E', text: 'Am Runenkreis rasten' };
+    return undefined;
   }
 
   private buildMapHtml(): string {
-    const visible = [...this.rooms.values()].filter(r => r.visited || Object.values(this.room.connections).includes(r.id)); const minX = Math.min(...visible.map(r => r.gx)); const maxX = Math.max(...visible.map(r => r.gx)); const minY = Math.min(...visible.map(r => r.gy)); const maxY = Math.max(...visible.map(r => r.gy));
-    const point = (r: Room) => ({ x: 60 + (r.gx - minX) / Math.max(1, maxX - minX) * 620, y: 50 + (r.gy - minY) / Math.max(1, maxY - minY) * 240 }); let lines = '';
-    for (const r of visible) for (const id of Object.values(r.connections)) { const other = this.rooms.get(id); if (!other || !visible.includes(other) || r.id > other.id) continue; const a = point(r); const b = point(other); const length = Math.hypot(b.x-a.x,b.y-a.y); const angle = Math.atan2(b.y-a.y,b.x-a.x); lines += `<i class="map-line" style="left:${a.x}px;top:${a.y}px;width:${length}px;transform:rotate(${angle}rad)"></i>`; }
-    const icons: Record<Room['kind'], string> = { start: 'ᚱ', combat: '·', elite: '♜', treasure: '◆', rest: '✚', boss: '☠' };
-    const nodes = visible.map(r => { const p = point(r); return `<b class="map-room ${r.id === this.room.id ? 'current' : ''} ${r.state}" style="left:${p.x}px;top:${p.y}px" title="${r.kind}">${r.visited ? icons[r.kind] : '?'}</b>`; }).join(''); return `<div class="map-grid">${lines}${nodes}</div>`;
+    return renderMapViewMarkup(buildMapViewModel(this.rooms, this.room));
   }
 
   private finish(victory: boolean): void {
-    if (this.mode === 'ending') return; this.mode = 'ending'; this.input.reset(); this.stats.elapsed = Math.max(this.stats.elapsed, .1); this.audio.play(victory ? 'victory' : 'defeat');
+    if (this.mode === 'ending') return; this.mode = 'ending'; this.audio.setMusicState('calm'); this.input.reset(); this.stats.elapsed = Math.max(this.stats.elapsed, .1); this.audio.play(victory ? 'victory' : 'defeat');
     const score = Math.floor(this.stats.kills * 110 + this.stats.goldFound * 9 + this.player.level * 300 + (victory ? 5000 : 0)); const r = this.store.records;
     r.bestScore = Math.max(r.bestScore, score); r.highestLevel = Math.max(r.highestLevel, this.player.level); r.mostKills = Math.max(r.mostKills, this.stats.kills);
     if (victory) { r.victories++; r.fastestWin = r.fastestWin === null ? this.stats.elapsed : Math.min(r.fastestWin, this.stats.elapsed); }

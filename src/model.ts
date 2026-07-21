@@ -64,8 +64,19 @@ export interface RunStats {
   potionsUsed: number; damageDealt: number; damageTaken: number;
 }
 
+export type DisplayMode = 'fit' | 'fullscreen';
+export type RenderPreset = 'auto' | '720p' | '900p' | '1080p' | '1440p';
+export type UiScale = 90 | 100 | 110 | 125;
+
 export interface Settings {
-  master: number; music: number; sfx: number; muted: boolean; shake: boolean; reducedEffects: boolean;
+  master: number; music: number; sfx: number; muted: boolean; shake: boolean; reducedEffects: boolean; tutorialHints: boolean;
+  displayMode: DisplayMode; renderPreset: RenderPreset; uiScale: UiScale;
+}
+
+export type TutorialId = 'move' | 'attack' | 'dash' | 'potion' | 'interact' | 'character' | 'map' | 'gold' | 'key';
+
+export interface TutorialProgress {
+  completed: Partial<Record<TutorialId, true>>;
 }
 
 export interface Records {
