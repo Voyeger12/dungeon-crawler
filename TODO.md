@@ -33,7 +33,7 @@ Diese Liste sammelt die geplanten Erweiterungen nach Priorität und Abhängigkei
 
 ## 2. Lydia und der Shop – P1
 
-- [ ] Festlegen, wo Lydia erscheint: Hub, sicherer Raum, zwischen Ebenen oder eine Kombination daraus
+- [x] Lydia erscheint im ersten Ausbau garantiert einmal pro Run in einem sicheren Händler- und Rastraum vor dem Boss
 - [ ] Lydia als sichtbaren NPC mit eigener Figur, Animation und Interaktionshinweis gestalten
 - [ ] Dialog- und Shop-Oberfläche im rauen mittelalterlichen Stil erstellen
 - [ ] Kategorien für Waffen, Rüstungen, Tränke und besondere Gegenstände einbauen
@@ -44,6 +44,8 @@ Diese Liste sammelt die geplanten Erweiterungen nach Priorität und Abhängigkei
 - [ ] Eigene Dialoge, Musik und Story-Verknüpfungen für Lydia hinzufügen
 
 **Abnahme:** Lydia ist ohne Verwechslung auffindbar; alle Transaktionen sind verständlich und speicherfest; der Shop kann nicht während eines aktiven Kampfes missbraucht werden.
+
+Der vollständige Thinktank-Beschluss mit MVP-Sortiment, Preisen, Architektur und QA steht in [`SHOP_PLAN.md`](SHOP_PLAN.md).
 
 ## 3. Figuren, Monster und Animationen – P1
 
@@ -197,12 +199,11 @@ Diese Liste sammelt die geplanten Erweiterungen nach Priorität und Abhängigkei
 
 ## Offene Entscheidungen
 
-- [ ] Wo und wie oft soll Lydia erscheinen?
-- [ ] Bleiben Items und Gold dauerhaft erhalten oder gelten sie nur für einen Run?
+- [x] Lydia erscheint zunächst einmal garantiert in einem sicheren Händlerraum vor dem Boss; eine Hub-Version folgt später
+- [x] Gold, Inventar und Ausrüstung gelten für einen Run; Lydia-Vertrauen, Freischaltungen, Lore und Kosmetik dürfen später dauerhaft bleiben
 - [ ] Wie viele Charaktere, Startwaffen, Gebiete und Ebenen sind für Version 1.0 vorgesehen?
 - [ ] Wie lang soll ein vollständiger erfolgreicher Run ungefähr dauern?
-- [ ] Sollen ausgerüstete Waffen und Rüstungen sichtbar am Charakter wechseln?
+- [x] Ausgerüstete Waffen, Rüstungen und Backpacks wechseln sichtbar über modulare Figuren-Layer
 - [ ] Soll der endgültige Grafikstil eher gemalt, hochauflösendes Pixel-Art oder eine Mischung sein?
 - [ ] Soll die Story linear sein oder durch mehrere Runs und freischaltbare Informationen erzählt werden?
 - [ ] Gibt es ein festes Ende oder mehrere Enden abhängig von Entscheidungen und Fortschritt?
-

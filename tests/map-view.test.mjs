@@ -8,7 +8,7 @@ const room = (id, gx, gy, overrides = {}) => ({
 });
 
 try {
-  const { buildMapViewModel, renderMapViewMarkup, MAP_VIEW_LEGEND } = await server.ssrLoadModule('/src/map-view.ts');
+  const { buildMapViewModel, buildMiniMapViewModel, renderMapViewMarkup, renderMiniMapMarkup, MAP_VIEW_LEGEND } = await server.ssrLoadModule('/src/map-view.ts');
 
   const rooms = new Map([
     ['start', room('start', -3, -2, { kind: 'start', state: 'cleared', visited: true, connections: { east: 'hall' } })],
@@ -58,7 +58,27 @@ try {
   assert.equal(single.nodes[0].yPercent, 50, 'invalid or single-axis coordinates should center safely');
   assert.equal(single.links.length, 0);
 
-  console.log('Large map view tests passed.');
+  const minimap = buildMiniMapViewModel(rooms, rooms.get('hall'));
+  const minimapCurrent = minimap.nodes.find(node => node.id === 'hall');
+  assert.equal(minimapCurrent.xPercent, 50, 'the current room must stay horizontally centred in the minimap');
+  assert.equal(minimapCurrent.yPercent, 50, 'the current room must stay vertically centred in the minimap');
+  assert.deepEqual(minimap.nodes.map(node => node.id).sort(), ['hall', 'hidden', 'start', 'vault'], 'the minimap should show visited nearby rooms and direct unknown exits, not the whole dungeon');
+  assert.equal(minimap.nodes.find(node => node.id === 'hidden').kind, 'unknown', 'the minimap must not reveal an adjacent room type');
+  assert.equal(minimap.nodes.some(node => node.id === 'remote'), false, 'unvisited rooms beyond a direct exit must stay hidden');
+
+  const minimapMarkup = renderMiniMapMarkup(minimap);
+  assert.match(minimapMarkup, /class="minimap-canvas"/);
+  assert.match(minimapMarkup, /class="minimap-room/);
+  assert.doesNotMatch(minimapMarkup, /Kartenlegende/, 'the compact minimap should not duplicate the large map legend');
+  assert.doesNotMatch(minimapMarkup, /left:\d+px|top:\d+px|width:\d+px/, 'compact geometry must remain resolution-independent');
+  assert.match(minimapMarkup, /left:50\.000%;top:50\.000%/, 'the current room should render at the fixed centre');
+
+  const safeMiniMarkup = renderMiniMapMarkup(buildMiniMapViewModel(malicious, '"><img src=x onerror=alert(1)>'));
+  assert.doesNotMatch(safeMiniMarkup, /<img src=x/);
+  assert.match(safeMiniMarkup, /&quot;&gt;&lt;img/);
+  assert.match(renderMiniMapMarkup(buildMiniMapViewModel(new Map(), 'missing')), /Noch keine/);
+
+  console.log('Large map and HUD minimap tests passed.');
 } finally {
   await server.close();
 }

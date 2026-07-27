@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "check": "tsc --noEmit",
-    "test": "node tests/storm-rune.test.mjs && node tests/audio.test.mjs && node tests/upgrade-reroll.test.mjs && node tests/ui-ux.test.mjs && node tests/display.test.mjs && node tests/map-view.test.mjs"
+    "test": "node tests/storm-rune.test.mjs && node tests/audio.test.mjs && node tests/upgrade-reroll.test.mjs && node tests/render-assets.test.mjs && node tests/ui-ux.test.mjs && node tests/display.test.mjs && node tests/map-view.test.mjs && node tests/branding.test.mjs && node tests/shop.test.mjs && node tests/end-screen.test.mjs"
   },
   "devDependencies": {
     "typescript": "5.8.3",

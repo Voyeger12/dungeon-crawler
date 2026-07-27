@@ -5,6 +5,7 @@ const server = await createServer({ appType: 'custom', logLevel: 'silent', serve
 
 try {
   const { Game } = await server.ssrLoadModule('/src/game.ts');
+  const { UI } = await server.ssrLoadModule('/src/ui.ts');
   const { UPGRADES } = await server.ssrLoadModule('/src/config.ts');
   const { createUpgradeOffers, getRerollCost, isUpgradeEligible, REROLL_FAILURE_MESSAGE } = await server.ssrLoadModule('/src/upgrade-offers.ts');
 
@@ -74,6 +75,19 @@ try {
     assert.deepEqual(h.game.levelOptions.map(option => option.id), before, 'insufficient gold must not replace the offers');
     assert.deepEqual(h.messages, [REROLL_FAILURE_MESSAGE], 'the lore-appropriate insufficient-funds message must be shown');
     assert.equal(h.sounds.includes('reroll'), false, 'a rejected reroll must not play the success sound');
+  }
+
+  {
+    const cards = { innerHTML: '', dataset: {} };
+    const ui = Object.create(UI.prototype);
+    ui.currentOverlay = 'level';
+    ui.root = {
+      querySelector: selector => selector === '.upgrade-cards' ? cards : null,
+      querySelectorAll: () => []
+    };
+    ui.replaceLevelUpOptions(first);
+    assert.equal(cards.dataset.rerolled, 'true', 'replacement tablets must carry the reroll reveal marker');
+    assert.match(cards.innerHTML, /class="upgrade-card"/, 'replacement tablets must remain present in the level-up DOM');
   }
 
   console.log('Upgrade reroll economy and validity tests passed.');

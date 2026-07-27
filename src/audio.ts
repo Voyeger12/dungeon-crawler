@@ -1,9 +1,34 @@
 import type { Settings } from './model';
 
 type SoundName = 'slash' | 'hit' | 'crit' | 'hurt' | 'dash' | 'shoot' | 'death' | 'gold' | 'pickup' | 'potion' | 'chest' | 'door' | 'level' | 'boss' | 'victory' | 'defeat' | 'warning';
-export type MusicState = 'calm' | 'combat' | 'boss';
+export type MusicState = 'menu' | 'intro' | 'calm' | 'combat' | 'boss';
 export type AudioScene = MusicState | 'levelup';
 export interface AudioSnapshot { scene: MusicState; }
+
+export type ScoreTrackId = 'oath' | 'omen' | 'vault' | 'clash' | 'crown';
+export interface ScoreTrack {
+  path: string;
+  title: string;
+  loop: boolean;
+}
+
+export const SCORE_TRACKS: Readonly<Record<ScoreTrackId, ScoreTrack>> = {
+  oath: { path: '/assets/audio/music/broken-crown-oath.mp3', title: 'Broken Crown Oath', loop: true },
+  omen: { path: '/assets/audio/music/runedeep-omen.mp3', title: 'Runedeep Omen', loop: false },
+  vault: { path: '/assets/audio/music/runedeep-vault.mp3', title: 'Runedeep Vault', loop: true },
+  clash: { path: '/assets/audio/music/runedeep-clash.mp3', title: 'Runedeep Clash', loop: true },
+  crown: { path: '/assets/audio/music/runedeep-crown.mp3', title: 'Runedeep Crown', loop: true }
+};
+
+export const SCORE_SCENES: Readonly<Record<MusicState, ScoreTrackId>> = {
+  menu: 'oath',
+  intro: 'omen',
+  calm: 'vault',
+  combat: 'clash',
+  boss: 'crown'
+};
+
+export const SCORE_CROSSFADE_SECONDS = 2.2;
 
 const midi = (note: number) => 440 * 2 ** ((note - 69) / 12);
 
@@ -13,9 +38,31 @@ interface MusicProfile {
   melodies: readonly (readonly (number | null)[])[];
 }
 
-export const MUSIC_TEMPOS: Readonly<Record<MusicState, number>> = { calm: 72, combat: 104, boss: 122 };
+interface ScorePlayer {
+  id: ScoreTrackId;
+  element: HTMLAudioElement;
+  gain: GainNode;
+}
+
+export const MUSIC_TEMPOS: Readonly<Record<MusicState, number>> = { menu: 68, intro: 80, calm: 72, combat: 104, boss: 122 };
 
 const MUSIC_PROFILES: Readonly<Record<MusicState, MusicProfile>> = {
+  menu: {
+    roots: [[38, 41, 36, 38], [38, 36, 43, 41], [43, 41, 38, 36]],
+    melodies: [
+      [62, null, 65, null, 67, null, 69, null, 67, null, 65, null, 64, null, 62, null],
+      [69, null, null, 67, 65, null, 64, null, 62, null, 64, null, 65, null, 62, null],
+      [67, null, 69, null, 70, null, 69, null, 67, null, 65, null, 64, null, 62, null]
+    ]
+  },
+  intro: {
+    roots: [[38, 36, 41, 43], [38, 41, 36, 43], [43, 41, 38, 36]],
+    melodies: [
+      [62, null, 65, null, 67, null, 69, 67, 65, null, 64, null, 62, null, 60, null],
+      [62, null, 64, 65, 67, null, 69, null, 70, null, 69, 67, 65, null, 62, null],
+      [69, null, 67, null, 65, 64, 62, null, 60, null, 62, 64, 65, null, 62, null]
+    ]
+  },
   calm: {
     roots: [[38, 41, 36, 38], [38, 36, 43, 41], [43, 41, 38, 36]],
     melodies: [
@@ -59,15 +106,19 @@ export function getMusicStepPlan(state: MusicState, step: number, variation = 0)
   const variant = ((Math.trunc(variation) % profile.roots.length) + profile.roots.length) % profile.roots.length;
   const root = profile.roots[variant]![bar]!;
   const melodicNote = profile.melodies[variant]![local] ?? undefined;
+  const gentle = state === 'calm' || state === 'menu';
   const ostinato = state === 'boss' ? [12, 13, 19, 18] : [12, 19, 22, 19];
-  const lute = state === 'calm' ? melodicNote : local % 2 === 0 ? root + ostinato[(local / 2) % ostinato.length]! : undefined;
-  const reed = state === 'calm' ? (bar % 2 === 1 && (local === 4 || local === 12) ? melodicNote : undefined) : melodicNote;
-  const bass = state === 'calm' ? (local === 0 || local === 8 ? root + (local === 8 ? 7 : 0) : undefined)
+  const lute = gentle ? melodicNote : local % 2 === 0 ? root + ostinato[(local / 2) % ostinato.length]! : undefined;
+  const reed = gentle ? (bar % 2 === 1 && (local === 4 || local === 12) ? melodicNote : undefined) : melodicNote;
+  const bass = gentle ? (local === 0 || local === 8 ? root + (local === 8 ? 7 : 0) : undefined)
     : local % 4 === 0 ? root + (local === 8 ? 7 : 0) : undefined;
-  const bell = state === 'calm' && local === 0 && bar % 2 === 0 ? root + 31 : state === 'boss' && local === 15 ? root + 24 : undefined;
+  const bell = gentle && local === 0 && bar % 2 === 0 ? root + 31 : state === 'boss' && local === 15 ? root + 24 : undefined;
   const drums: DrumVoice[] = [];
-  if (state === 'calm') {
+  if (gentle) {
     if (local === 0 || local === 8) drums.push('frame');
+    if (local === 6 || local === 14) drums.push('rattle');
+  } else if (state === 'intro') {
+    if (local === 0 || local === 8) drums.push(bar < 2 ? 'frame' : 'war');
     if (local === 6 || local === 14) drums.push('rattle');
   } else if (state === 'combat') {
     if ([0, 6, 8, 14].includes(local)) drums.push('war');
@@ -85,8 +136,10 @@ export class AudioManager {
   private context?: AudioContext;
   private master?: GainNode;
   private music?: GainNode;
+  private score?: GainNode;
   private fanfare?: GainNode;
   private musicFilter?: BiquadFilterNode;
+  private scoreFilter?: BiquadFilterNode;
   private noise?: AudioBuffer;
   private scheduler?: number;
   private nextStepTime = 0;
@@ -95,20 +148,33 @@ export class AudioManager {
   private musicState: MusicState = 'calm';
   private scene: AudioScene = 'calm';
   private levelSnapshot?: AudioSnapshot;
+  private scorePlayers = new Map<ScoreTrackId, ScorePlayer>();
+  private activeScore?: ScorePlayer;
+  private scoreReady = false;
+  private scorePlaying = false;
+  private scoreLoad?: Promise<boolean>;
 
   constructor(private settings: Settings) {}
 
   start(): void {
-    if (this.context) { void this.context.resume(); return; }
+    if (this.context) {
+      void this.context.resume();
+      if (!this.scoreReady) void this.preloadScore();
+      return;
+    }
     const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtx) return;
     this.context = new AudioCtx();
-    this.master = this.context.createGain(); this.music = this.context.createGain(); this.fanfare = this.context.createGain(); this.musicFilter = this.context.createBiquadFilter();
+    this.master = this.context.createGain(); this.music = this.context.createGain(); this.score = this.context.createGain(); this.fanfare = this.context.createGain();
+    this.musicFilter = this.context.createBiquadFilter(); this.scoreFilter = this.context.createBiquadFilter();
     this.musicFilter.type = 'lowpass'; this.musicFilter.frequency.value = 2200; this.musicFilter.Q.value = .7;
-    this.music.connect(this.musicFilter).connect(this.master); this.fanfare.connect(this.master); this.master.connect(this.context.destination);
+    this.scoreFilter.type = 'lowpass'; this.scoreFilter.frequency.value = 2400; this.scoreFilter.Q.value = .55;
+    this.music.connect(this.musicFilter).connect(this.master); this.score.connect(this.scoreFilter).connect(this.master);
+    this.fanfare.connect(this.master); this.master.connect(this.context.destination);
     this.noise = this.createNoiseBuffer(); this.nextStepTime = this.context.currentTime + .08;
     if (this.scheduler === undefined) this.scheduler = window.setInterval(() => this.scheduleMusic(), 45);
     this.applySettings(this.settings);
+    void this.preloadScore();
   }
 
   setMusicState(state: MusicState): void {
@@ -116,11 +182,17 @@ export class AudioManager {
     if (state === this.musicState && state === this.scene) return;
     const previous = this.musicState; this.musicState = state; this.scene = state; this.variation = (this.variation + 1) % 3; this.step = 0;
     if (!this.context || !this.musicFilter || !this.music) return;
-    const now = this.context.currentTime; const cutoff = state === 'boss' ? 5200 : state === 'combat' ? 3900 : 2400;
+    const now = this.context.currentTime;
+    const cutoff = state === 'boss' ? 5200 : state === 'combat' ? 3900 : state === 'intro' ? 3200 : state === 'menu' ? 2200 : 2400;
     this.nextStepTime = now + .09;
     this.musicFilter.frequency.cancelScheduledValues(now); this.musicFilter.frequency.setTargetAtTime(cutoff, now, .24);
-    this.music.gain.cancelScheduledValues(now); this.music.gain.setTargetAtTime(this.settings.music * .34, now, .04); this.music.gain.setTargetAtTime(this.settings.music * .78, now + .12, .18);
-    this.transitionCue(previous, state, now + .035);
+    if (this.scoreReady) {
+      this.playScoreForState(state);
+      this.updateScoreMix(now);
+    } else {
+      this.music.gain.cancelScheduledValues(now); this.music.gain.setTargetAtTime(this.settings.music * .34, now, .04); this.music.gain.setTargetAtTime(this.settings.music * .78, now + .12, .18);
+      this.transitionCue(previous, state, now + .035);
+    }
   }
 
   captureScene(): AudioSnapshot {
@@ -133,6 +205,10 @@ export class AudioManager {
       const now = this.context.currentTime;
       this.music.gain.cancelScheduledValues(now); this.music.gain.setTargetAtTime(this.settings.music * .2, now, .1);
       this.musicFilter.frequency.cancelScheduledValues(now); this.musicFilter.frequency.setTargetAtTime(900, now, .12);
+      if (this.score && this.scoreFilter) {
+        this.score.gain.cancelScheduledValues(now); this.score.gain.setTargetAtTime(this.settings.music * .17, now, .12);
+        this.scoreFilter.frequency.cancelScheduledValues(now); this.scoreFilter.frequency.setTargetAtTime(900, now, .12);
+      }
     }
     this.playLevelUpFanfare(stacked);
   }
@@ -173,8 +249,14 @@ export class AudioManager {
   restoreScene(snapshot: AudioSnapshot = this.levelSnapshot ?? { scene: 'calm' }): void {
     this.levelSnapshot = undefined; this.scene = snapshot.scene; this.musicState = snapshot.scene;
     if (!this.context || !this.music || !this.musicFilter) return;
-    const now = this.context.currentTime; const cutoff = snapshot.scene === 'boss' ? 5200 : snapshot.scene === 'combat' ? 3900 : 2400;
-    this.music.gain.cancelScheduledValues(now); this.music.gain.setTargetAtTime(this.settings.music * .78, now, .18);
+    const now = this.context.currentTime;
+    const cutoff = snapshot.scene === 'boss' ? 5200 : snapshot.scene === 'combat' ? 3900 : snapshot.scene === 'intro' ? 3200 : snapshot.scene === 'menu' ? 2200 : 2400;
+    if (this.scoreReady) {
+      this.playScoreForState(snapshot.scene);
+      this.updateScoreMix(now);
+    } else {
+      this.music.gain.cancelScheduledValues(now); this.music.gain.setTargetAtTime(this.settings.music * .78, now, .18);
+    }
     this.musicFilter.frequency.cancelScheduledValues(now); this.musicFilter.frequency.setTargetAtTime(cutoff, now, .24);
   }
 
@@ -183,12 +265,126 @@ export class AudioManager {
     if (!this.context || !this.master || !this.music || !this.fanfare) return;
     const now = this.context.currentTime;
     this.master.gain.setTargetAtTime(settings.muted ? 0 : settings.master, now, .02);
-    this.music.gain.setTargetAtTime(settings.music * (this.scene === 'levelup' ? .2 : .78), now, .08);
+    this.music.gain.setTargetAtTime(this.scoreReady && this.scorePlaying ? .0001 : settings.music * (this.scene === 'levelup' ? .2 : .78), now, .08);
+    if (this.score) this.score.gain.setTargetAtTime(this.scoreReady && this.scorePlaying ? settings.music * this.scoreLevel() : .0001, now, .08);
     this.fanfare.gain.setTargetAtTime(settings.music * .82, now, .08);
   }
 
+  preloadScore(): Promise<boolean> {
+    if (!this.scoreLoad) this.scoreLoad = this.prepareScorePlayers();
+    return this.scoreLoad;
+  }
+
+  hasSampleScore(): boolean {
+    return this.scoreReady;
+  }
+
+  /*
+   * The long masters stay compressed in HTMLAudioElements. Routing them through
+   * Web Audio preserves the shared mixer without decoding roughly 286 MB of PCM.
+   */
+  private async prepareScorePlayers(): Promise<boolean> {
+    const context = this.context;
+    if (!context || !this.score || typeof context.createMediaElementSource !== 'function' || typeof window.Audio !== 'function') return false;
+    try {
+      if (this.scorePlayers.size !== Object.keys(SCORE_TRACKS).length) {
+        for (const id of Object.keys(SCORE_TRACKS) as ScoreTrackId[]) {
+          if (this.scorePlayers.has(id)) continue;
+          const track = SCORE_TRACKS[id];
+          const element = new window.Audio();
+          element.preload = 'auto'; element.loop = track.loop; element.src = track.path;
+          const source = context.createMediaElementSource(element); const gain = context.createGain();
+          gain.gain.value = .0001; source.connect(gain).connect(this.score);
+          element.load();
+          this.scorePlayers.set(id, { id, element, gain });
+        }
+      }
+      if (this.context !== context) return false;
+      this.scoreReady = this.scorePlayers.size === Object.keys(SCORE_TRACKS).length;
+      if (!this.scoreReady) return false;
+      this.playScoreForState(this.musicState, true);
+      this.applySettings(this.settings);
+      return true;
+    } catch (error) {
+      for (const player of this.scorePlayers.values()) player.element.pause();
+      this.scorePlayers.clear();
+      console.warn('Die Runedeep-Musik konnte nicht vorbereitet werden; der prozedurale Soundtrack bleibt aktiv.', error);
+      return false;
+    }
+  }
+
+  private playScoreForState(state: MusicState, initial = false): void {
+    const context = this.context;
+    if (!context || !this.scoreReady) return;
+    const id = SCORE_SCENES[state];
+    if (this.activeScore?.id === id) return;
+    const incoming = this.scorePlayers.get(id);
+    if (!incoming) return;
+    const now = context.currentTime;
+    const outgoing = this.activeScore;
+    if (outgoing) {
+      outgoing.gain.gain.cancelScheduledValues(now);
+      outgoing.gain.gain.setValueAtTime(Math.max(.0001, outgoing.gain.gain.value), now);
+      outgoing.gain.gain.setTargetAtTime(.0001, now, SCORE_CROSSFADE_SECONDS / 5);
+      window.setTimeout(() => {
+        if (this.activeScore?.id !== outgoing.id) outgoing.element.pause();
+      }, (SCORE_CROSSFADE_SECONDS + .15) * 1000);
+    }
+    const fade = initial && !outgoing ? .9 : SCORE_CROSSFADE_SECONDS;
+    if (!SCORE_TRACKS[id].loop) incoming.element.currentTime = 0;
+    incoming.gain.gain.cancelScheduledValues(now);
+    incoming.gain.gain.setValueAtTime(Math.max(.0001, incoming.gain.gain.value), now);
+    incoming.gain.gain.setTargetAtTime(1, now, fade / 5);
+    this.activeScore = incoming;
+    const playback = incoming.element.play();
+    if (playback && typeof playback.catch === 'function') {
+      void playback.then(() => {
+        if (this.activeScore?.id !== incoming.id || !this.context) return;
+        this.scorePlaying = true;
+        this.updateScoreMix(this.context.currentTime);
+      }).catch((error: unknown) => {
+          const name = error instanceof DOMException ? error.name : '';
+          if (name === 'AbortError' || this.activeScore?.id !== incoming.id) return;
+          this.disableSampleScore(error);
+        });
+    } else {
+      this.scorePlaying = true;
+      this.updateScoreMix(now);
+    }
+  }
+
+  private disableSampleScore(error: unknown): void {
+    this.scoreReady = false; this.scorePlaying = false; this.scoreLoad = undefined;
+    for (const player of this.scorePlayers.values()) {
+      player.element.pause();
+      if (this.context) player.gain.gain.setValueAtTime(.0001, this.context.currentTime);
+    }
+    this.activeScore = undefined;
+    if (this.context && this.music && this.score) {
+      const now = this.context.currentTime;
+      this.score.gain.setTargetAtTime(.0001, now, .05);
+      this.music.gain.setTargetAtTime(this.settings.music * (this.scene === 'levelup' ? .2 : .78), now, .08);
+      this.nextStepTime = now + .08;
+    }
+    console.warn('Die Runedeep-Musik konnte nicht wiedergegeben werden; der prozedurale Soundtrack übernimmt.', error);
+  }
+
+  private updateScoreMix(now: number): void {
+    if (!this.score || !this.scoreFilter || !this.music) return;
+    const cutoff = this.musicState === 'boss' ? 7200 : this.musicState === 'combat' ? 5600 : this.musicState === 'intro' ? 4400 : this.musicState === 'menu' ? 3200 : 3600;
+    this.scoreFilter.frequency.cancelScheduledValues(now); this.scoreFilter.frequency.setTargetAtTime(cutoff, now, .3);
+    this.score.gain.cancelScheduledValues(now); this.score.gain.setTargetAtTime(this.scorePlaying ? this.settings.music * this.scoreLevel() : .0001, now, .18);
+    this.music.gain.cancelScheduledValues(now);
+    this.music.gain.setTargetAtTime(this.scorePlaying ? .0001 : this.settings.music * (this.scene === 'levelup' ? .2 : .78), now, .12);
+  }
+
+  private scoreLevel(): number {
+    if (this.scene === 'levelup') return .17;
+    return this.musicState === 'boss' ? .9 : this.musicState === 'combat' ? .82 : this.musicState === 'intro' ? .74 : this.musicState === 'menu' ? .64 : .7;
+  }
+
   private scheduleMusic(): void {
-    const context = this.context; if (!context || context.state === 'suspended') return;
+    const context = this.context; if (!context || context.state === 'suspended' || (this.scoreReady && this.scorePlaying)) return;
     while (this.nextStepTime < context.currentTime + .16) {
       this.scheduleStep(this.step, this.nextStepTime);
       this.nextStepTime += 60 / MUSIC_TEMPOS[this.musicState] / 4; this.step = (this.step + 1) % 64;
@@ -198,10 +394,10 @@ export class AudioManager {
 
   private scheduleStep(step: number, at: number): void {
     const plan = getMusicStepPlan(this.musicState, step, this.variation);
-    const intensity = this.musicState === 'boss' ? 1 : this.musicState === 'combat' ? .78 : .5;
+    const intensity = this.musicState === 'boss' ? 1 : this.musicState === 'combat' ? .78 : this.musicState === 'intro' ? .62 : this.musicState === 'menu' ? .43 : .5;
     if (plan.openFifth) this.openFifth(plan.root + 12, at, .038 * intensity);
     if (plan.bass !== undefined) this.bass(plan.bass, at, .052 * intensity);
-    if (plan.lute !== undefined) this.lute(plan.lute, at, (this.musicState === 'calm' ? .045 : .034) * intensity);
+    if (plan.lute !== undefined) this.lute(plan.lute, at, (this.musicState === 'calm' || this.musicState === 'menu' ? .045 : .034) * intensity);
     if (plan.reed !== undefined) this.reed(plan.reed, at, .035 * intensity, this.musicState === 'boss' ? .42 : .34);
     if (plan.bell !== undefined) this.bell(plan.bell, at, .026 * intensity);
     for (const drum of plan.drums) {
@@ -225,6 +421,8 @@ export class AudioManager {
     } else if (next === 'combat') {
       this.frameDrum(at, .065); this.warDrum(at + .13, .085);
       this.reed(62, at + .04, .03, .34); this.reed(69, at + .24, .032, .42);
+    } else if (next === 'intro') {
+      this.bell(62, at, .02); this.frameDrum(at + .18, .045); this.reed(65, at + .25, .026, .42);
     } else {
       this.bell(69, at, .025); this.bell(65, at + .16, .021); this.bell(62, at + .34, .018);
     }

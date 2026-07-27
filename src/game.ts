@@ -1,18 +1,19 @@
 import { AudioManager, type AudioSnapshot } from './audio';
-import { ENEMY_STATS, PLAYER_BASE, RELICS, UPGRADES, WORLD, XP_FOR_LEVEL, type RelicId, type UpgradeId } from './config';
+import { ENEMY_STATS, PLAYER_BASE, RELICS, UPGRADES, WORLD, XP_FOR_LEVEL, type RelicId } from './config';
 import { generateDungeon, oppositeDirection } from './dungeon';
 import { InputManager } from './input';
+import { activateLydiaOffer, createLydiaShop, syncPlayerStats, type LydiaShopState } from './items';
 import type { HudContext, HudState } from './hud';
-import { buildMapViewModel, renderMapViewMarkup } from './map-view';
+import { buildMapViewModel, buildMiniMapViewModel, renderMapViewMarkup, renderMiniMapMarkup } from './map-view';
 import { angleDiff, circleHit, clamp, dist, normalize, pick, rand, randi, type Vec } from './math';
-import type { Direction, Enemy, EnemyKind, FloatText, Hazard, Particle, Pickup, Player, Projectile, Room, RunStats } from './model';
+import type { Direction, Enemy, EnemyKind, FloatText, Hazard, Particle, ParticleVisual, Pickup, Player, Projectile, ProjectileVisual, Room, RunStats } from './model';
 import { Renderer } from './renderer';
 import { StorageManager } from './storage';
 import { TutorialController } from './tutorial';
 import { UI, type UIActions } from './ui';
 import { createUpgradeOffers, getRerollCost, REROLL_FAILURE_MESSAGE } from './upgrade-offers';
 
-type Mode = 'menu' | 'running' | 'paused' | 'level' | 'character' | 'map' | 'settings' | 'ending';
+type Mode = 'menu' | 'loading' | 'running' | 'paused' | 'level' | 'character' | 'map' | 'shop' | 'settings' | 'ending';
 type ModalOrigin = 'running' | 'paused' | 'menu';
 type LevelPhase = 'idle' | 'intro' | 'choosing' | 'rerolling' | 'committed' | 'exit';
 type LevelReward = { level: number };
@@ -23,6 +24,8 @@ const LEVEL_EXIT_TIME = .18;
 const LEVEL_REROLL_SWAP_TIME = .22;
 const LEVEL_REROLL_END_TIME = .48;
 const LEVEL_SELECTION_INPUTS = ['Space', 'Digit1', 'Digit2', 'Digit3', 'KeyR'] as const;
+const PLAYER_ATTACK_DURATION = .34;
+const PLAYER_ATTACK_CONTACT = .06;
 
 export class Game implements UIActions {
   private renderer: Renderer;
@@ -58,24 +61,45 @@ export class Game implements UIActions {
   private levelRerollCount = 0;
   private levelRerollSwapped = false;
   private modalOrigin: ModalOrigin = 'running';
+  private readonly assetsReady: Promise<void>;
+  private startingRun = false;
+  private pendingPlayerHit?: { aim: number; combo: boolean; attackCount: number };
+  private lydiaShop: LydiaShopState = createLydiaShop(() => 0);
+  private shopPurchaseLocked = false;
+  private minimapSignature = '';
+  private minimapHtml = '';
 
   constructor(private canvas: HTMLCanvasElement, private store: StorageManager) {
     this.renderer = new Renderer(canvas);
+    this.assetsReady = this.renderer.preload();
     this.audio = new AudioManager(store.settings);
+    this.audio.setMusicState('menu');
     this.tutorial = new TutorialController(store);
     this.input = new InputManager(canvas, () => { if (this.mode === 'running') this.pause(); }, () => this.mode === 'running');
     this.ui = new UI(store, this);
     window.addEventListener('rune-settings', () => this.audio.applySettings(this.store.settings));
+    let menuAudioUnlocked = false;
+    const unlockMenuAudio = () => {
+      if (menuAudioUnlocked) return; menuAudioUnlocked = true;
+      window.removeEventListener('pointerdown', unlockMenuAudio); window.removeEventListener('keydown', unlockMenuAudio);
+      this.audio.start(); if (this.mode === 'menu' || this.mode === 'settings') this.audio.setMusicState('menu');
+    };
+    window.addEventListener('pointerdown', unlockMenuAudio, { once: true }); window.addEventListener('keydown', unlockMenuAudio, { once: true });
     this.ui.showStart(); requestAnimationFrame(this.loop);
   }
 
   startRun(): void {
-    this.audio.start(); this.resetRun(); this.mode = 'running'; this.ui.beginGame(); this.canvas.focus();
+    if (this.startingRun) return;
+    this.startingRun = true; this.mode = 'loading'; this.ui.showAssetLoading();
+    void this.assetsReady.then(() => {
+      if (this.mode !== 'loading') return;
+      this.audio.start(); this.resetRun(); this.mode = 'running'; this.ui.beginGame(); this.canvas.focus();
+    }).finally(() => { this.startingRun = false; });
   }
 
   restart(): void { this.audio.start(); this.resetRun(); this.mode = 'running'; this.ui.beginGame(); this.input.reset(); this.canvas.focus(); }
   resume(): void { if (!this.player) return; this.ui.clearOverlay(); this.mode = 'running'; this.input.reset(); this.canvas.focus(); }
-  mainMenu(): void { this.mode = 'menu'; this.audio.setMusicState('calm'); this.enemies = []; this.projectiles = []; this.hazards = []; this.input.reset(); this.ui.showStart(); }
+  mainMenu(): void { this.mode = 'menu'; this.audio.setMusicState('menu'); this.enemies = []; this.projectiles = []; this.hazards = []; this.input.reset(); this.ui.showStart(); }
 
   openCharacter(origin: 'running' | 'paused'): void {
     if (!this.player || (this.mode !== 'running' && this.mode !== 'paused')) return;
@@ -88,6 +112,7 @@ export class Game implements UIActions {
   }
 
   closeModal(): void {
+    if (this.mode === 'shop') { this.resume(); return; }
     if (this.mode === 'character' || this.mode === 'map' || this.mode === 'settings') {
       const closedMode = this.mode; const origin = this.modalOrigin; this.input.reset();
       if (origin === 'running') this.resume();
@@ -98,12 +123,30 @@ export class Game implements UIActions {
 
   resetTutorials(): void { this.store.resetTutorials(); this.tutorial.suspendUntilNextRun(); }
 
+  activateShopOffer(instanceId: string): void {
+    if (this.mode !== 'shop' || this.shopPurchaseLocked) return;
+    this.shopPurchaseLocked = true;
+    try {
+      const result = activateLydiaOffer(this.player, this.lydiaShop, instanceId);
+      if (result.ok) {
+        const purchased = result.kind === 'purchased';
+        this.audio.play(purchased ? 'gold' : 'pickup');
+        this.renderer.flash = purchased ? .08 : .04;
+      } else this.audio.play('warning');
+      this.ui.showShop(this.lydiaShop, this.player, result.message);
+    } finally {
+      this.shopPurchaseLocked = false;
+    }
+  }
+
   chooseUpgrade(id: string): void {
     if (this.mode !== 'level' || this.levelPhase !== 'choosing' || this.levelSelectionLocked) return;
     const upgrade = this.levelOptions.find(item => item.id === id); if (!upgrade) return;
     this.levelSelectionLocked = true; this.levelPhase = 'committed'; this.levelPhaseTime = 0;
     this.ui.setLevelUpState('committed', upgrade.id); this.audio.playLevelUpConfirm();
-    this.applyUpgrade(upgrade.id); this.player.upgrades.push(upgrade.id); this.tutorial.queue('character'); this.ui.toast(`${upgrade.icon} ${upgrade.name}`, 'good');
+    this.player.upgrades.push(upgrade.id); syncPlayerStats(this.player);
+    if (upgrade.id === 'vitality') this.heal(25, false);
+    this.tutorial.queue('character'); this.ui.toast(`${upgrade.icon} ${upgrade.name}`, 'good');
     this.pendingLevels.shift(); this.levelRerollCount = 0; this.pendingRerollOptions = [];
   }
 
@@ -139,12 +182,15 @@ export class Game implements UIActions {
       gold: 0, potions: PLAYER_BASE.potions, keys: 0, aim: -Math.PI / 2, attackTimer: 0, attackAnim: 0,
       attackCombo: 0, attackCount: 0, dashTimer: 0, dashCdTimer: 0, dashDir: { x: 0, y: -1 }, invuln: 0,
       flash: 0, shield: 0, vx: 0, vy: 0, upgrades: [], relics: [], lifeSteal: 0, roomHeal: 0,
-      burnChance: 0, dashShield: false, damageBuff: 0, speedBuff: 0
+      burnChance: 0, dashShield: false, damageBuff: 0, speedBuff: 0, equipment: {}, ownedItems: []
     };
+    syncPlayerStats(this.player);
+    this.lydiaShop = createLydiaShop(); this.shopPurchaseLocked = false;
     this.stats = { startTime: performance.now(), elapsed: 0, kills: 0, goldFound: 0, roomsVisited: 1, potionsUsed: 0, damageDealt: 0, damageTaken: 0 };
     this.time = 0; this.roomIntro = 2.2; this.roomTransitionCd = .5; this.pendingLevels = []; this.pendingDefeat = false; this.endTimer = 0; this.nextId = 1;
     this.levelOptions = []; this.pendingRerollOptions = []; this.levelRerollCount = 0; this.levelRerollSwapped = false;
-    this.levelPhase = 'idle'; this.levelPhaseTime = 0; this.levelSelectionLocked = false; this.levelAudioSnapshot = undefined; this.tutorial.beginRun();
+    this.levelPhase = 'idle'; this.levelPhaseTime = 0; this.levelSelectionLocked = false; this.levelAudioSnapshot = undefined; this.pendingPlayerHit = undefined; this.tutorial.beginRun();
+    this.minimapSignature = ''; this.minimapHtml = '';
     this.store.records.runs++; this.store.save();
   }
 
@@ -154,7 +200,8 @@ export class Game implements UIActions {
     if (this.player && this.room && this.mode !== 'menu') this.renderer.render({
       room: this.room, rooms: this.rooms, player: this.player, enemies: this.enemies, projectiles: this.projectiles,
       pickups: this.pickups, hazards: this.hazards, particles: this.particles, texts: this.texts, time: this.time,
-      doorsOpen: this.doorsOpen(), roomIntro: this.roomIntro, settings: this.store.settings
+      doorsOpen: this.doorsOpen(), roomIntro: this.roomIntro, settings: this.store.settings,
+      shopStock: this.room.kind === 'shop' ? this.lydiaShop.stock : undefined
     });
     this.input.endFrame(); requestAnimationFrame(this.loop);
   };
@@ -164,6 +211,7 @@ export class Game implements UIActions {
     else if (this.mode === 'paused' && this.input.consume('Escape')) this.resume();
     else if (this.mode === 'character' && this.input.consumeAny('KeyC', 'KeyI', 'Escape')) this.closeModal();
     else if (this.mode === 'map' && this.input.consumeAny('KeyM', 'Escape')) this.closeModal();
+    else if (this.mode === 'shop' && this.input.consume('Escape')) this.closeModal();
     else if (this.mode === 'settings' && this.input.consume('Escape')) this.closeModal();
     else if (this.mode === 'ending' && this.input.consume('KeyR')) this.restart();
   }
@@ -182,7 +230,11 @@ export class Game implements UIActions {
   }
 
   private updateTimers(dt: number): void {
-    const p = this.player; p.attackTimer = Math.max(0, p.attackTimer - dt); p.attackAnim = Math.max(0, p.attackAnim - dt);
+    const p = this.player; const previousAttackAnim = p.attackAnim; p.attackTimer = Math.max(0, p.attackTimer - dt); p.attackAnim = Math.max(0, p.attackAnim - dt);
+    const contactRemaining = PLAYER_ATTACK_DURATION - PLAYER_ATTACK_CONTACT;
+    if (this.pendingPlayerHit && previousAttackAnim > contactRemaining && p.attackAnim <= contactRemaining) {
+      const hit = this.pendingPlayerHit; this.pendingPlayerHit = undefined; this.resolvePlayerHit(hit);
+    }
     p.dashTimer = Math.max(0, p.dashTimer - dt); p.dashCdTimer = Math.max(0, p.dashCdTimer - dt); p.invuln = Math.max(0, p.invuln - dt); p.flash = Math.max(0, p.flash - dt);
     p.damageBuff = Math.max(0, p.damageBuff - dt); p.speedBuff = Math.max(0, p.speedBuff - dt);
   }
@@ -208,36 +260,48 @@ export class Game implements UIActions {
     const p = this.player; if (p.dashCdTimer > 0 || p.dashTimer > 0) return;
     const direction = move.x || move.y ? move : { x: Math.cos(p.aim), y: Math.sin(p.aim) };
     p.dashDir = direction; p.dashTimer = p.dashDuration; p.dashCdTimer = p.dashCooldown; p.invuln = Math.max(p.invuln, p.dashDuration + .06);
-    if (p.dashShield) p.shield = Math.max(p.shield, 12); this.tutorial.complete('dash'); this.audio.play('dash'); this.burst(p.x, p.y, '#6db1c7', 9, 125); this.renderer.shake = 2;
+    if (p.dashShield) p.shield = Math.max(p.shield, 12);
+    this.effect(p.x, p.y, 'wind', .28, 76, Math.atan2(direction.y, direction.x), 1.2, .7);
+    this.tutorial.complete('dash'); this.audio.play('dash'); this.burst(p.x, p.y, '#6db1c7', 9, 125); this.renderer.shake = 2;
   }
 
   private attack(): void {
-    const p = this.player; p.attackTimer = p.attackRate; p.attackAnim = .34; p.attackCombo = (p.attackCombo + 1) % 3; p.attackCount++; this.tutorial.complete('attack'); this.audio.play('slash');
-    const combo = p.attackCombo === 2; const range = p.range * (combo ? 1.15 : 1); const arc = combo ? 1.15 : .88;
+    const p = this.player; p.attackTimer = p.attackRate; p.attackAnim = PLAYER_ATTACK_DURATION; p.attackCombo = (p.attackCombo + 1) % 3; p.attackCount++;
+    this.pendingPlayerHit = { aim: p.aim, combo: p.attackCombo === 2, attackCount: p.attackCount };
+    this.tutorial.complete('attack'); this.audio.play('slash');
+  }
+
+  private resolvePlayerHit(hit: { aim: number; combo: boolean; attackCount: number }): void {
+    const p = this.player; const range = p.range * (hit.combo ? 1.15 : 1); const arc = hit.combo ? 1.15 : .88;
     const directTargets = this.enemies
-      .filter(enemy => enemy.state !== 'dead' && dist(p, enemy) <= range + enemy.radius && Math.abs(angleDiff(Math.atan2(enemy.y - p.y, enemy.x - p.x), p.aim)) <= arc)
+      .filter(enemy => enemy.state !== 'dead' && dist(p, enemy) <= range + enemy.radius && Math.abs(angleDiff(Math.atan2(enemy.y - p.y, enemy.x - p.x), hit.aim)) <= arc)
       .sort((a, b) => dist(p, a) - dist(p, b) || a.id - b.id);
     const stormOrigin = directTargets[0];
     for (const enemy of directTargets) {
-      const crit = Math.random() < p.critChance; let damage = p.damage * (p.damageBuff > 0 ? 1.35 : 1) * (combo ? 1.28 : 1) * (crit ? p.critMultiplier : 1);
-      damage = Math.round(damage); this.damageEnemy(enemy, damage, crit, p.aim);
+      const crit = Math.random() < p.critChance; let damage = p.damage * (p.damageBuff > 0 ? 1.35 : 1) * (hit.combo ? 1.28 : 1) * (crit ? p.critMultiplier : 1);
+      damage = Math.round(damage); this.damageEnemy(enemy, damage, crit, hit.aim);
     }
-    if (stormOrigin && this.hasRelic('storm-rune') && p.attackCount % 3 === 0) this.chainLightning(stormOrigin);
+    if (stormOrigin && this.hasRelic('storm-rune') && hit.attackCount % 3 === 0) this.chainLightning(stormOrigin);
     for (const obstacle of this.room.obstacles) {
       if (!obstacle.breakable || obstacle.hp <= 0 || dist(p, obstacle) > range + obstacle.radius) continue;
-      const a = Math.atan2(obstacle.y - p.y, obstacle.x - p.x); if (Math.abs(angleDiff(a, p.aim)) > arc) continue;
+      const a = Math.atan2(obstacle.y - p.y, obstacle.x - p.x); if (Math.abs(angleDiff(a, hit.aim)) > arc) continue;
       obstacle.hp -= p.damage; this.burst(obstacle.x, obstacle.y, '#a87b56', 6, 90); if (obstacle.hp <= 0) this.breakObstacle(obstacle.x, obstacle.y);
     }
-    if (directTargets.length > 0) { this.renderer.shake = combo ? 6 : 3; if (combo) this.renderer.flash = .05; }
+    if (directTargets.length > 0) { this.renderer.shake = hit.combo ? 6 : 3; if (hit.combo) this.renderer.flash = .05; }
   }
 
   private damageEnemy(enemy: Enemy, amount: number, crit: boolean, attackAngle?: number): void {
     if (enemy.state === 'dead') return; enemy.hp -= amount; enemy.flash = .11; this.stats.damageDealt += amount;
     const color = crit ? '#ffd166' : '#f4e5d1'; this.floatText(enemy.x, enemy.y - enemy.radius, `${crit ? '✦ ' : ''}${amount}`, color, crit ? 20 : 15);
     this.burst(enemy.x, enemy.y, crit ? '#ffd166' : '#e15a63', crit ? 13 : 7, crit ? 180 : 110); this.audio.play(crit ? 'crit' : 'hit');
+    this.effect(enemy.x, enemy.y, crit ? 'crit' : 'hit', crit ? .34 : .22, crit ? 92 : 70, attackAngle ?? 0);
     if (attackAngle !== undefined && enemy.kind !== 'boss') { enemy.x += Math.cos(attackAngle) * (crit ? 22 : 13); enemy.y += Math.sin(attackAngle) * (crit ? 22 : 13); }
     const frost = this.hasRelic('frost-amulet'); if (frost) enemy.slow = Math.max(enemy.slow, 1.7);
-    if (this.player.burnChance > 0 && Math.random() < this.player.burnChance) enemy.burn = Math.max(enemy.burn, 2.8);
+    if (this.player.burnChance > 0 && Math.random() < this.player.burnChance) {
+      const ignited = enemy.burn <= 0;
+      enemy.burn = Math.max(enemy.burn, 2.8);
+      if (ignited) this.effect(enemy.x, enemy.y, 'burnIgnite', .38, Math.max(72, enemy.radius * 3.4));
+    }
     if (this.player.lifeSteal > 0) this.heal(amount * this.player.lifeSteal, false);
     if (enemy.hp <= 0) this.killEnemy(enemy);
   }
@@ -248,11 +312,13 @@ export class Game implements UIActions {
   }
 
   private killEnemy(enemy: Enemy): void {
-    if (enemy.state === 'dead') return; enemy.state = 'dead'; enemy.hp = 0; this.stats.kills++; this.audio.play('death'); this.burst(enemy.x, enemy.y, enemy.kind === 'boss' ? '#c55973' : '#8b637e', enemy.kind === 'boss' ? 45 : 18, enemy.kind === 'boss' ? 270 : 150);
+    if (enemy.state === 'dead') return; enemy.state = 'dead'; enemy.deathTimer = enemy.kind === 'boss' ? 1.35 : .72; enemy.hp = 0; this.stats.kills++; this.audio.play('death'); this.burst(enemy.x, enemy.y, enemy.kind === 'boss' ? '#c55973' : '#8b637e', enemy.kind === 'boss' ? 45 : 18, enemy.kind === 'boss' ? 270 : 150);
     this.gainXp(enemy.xp); const goldMultiplier = this.hasRelic('golden-skull') ? 1.45 : 1; const gold = Math.round(randi(enemy.gold[0], enemy.gold[1]) * (enemy.elite ? 2.2 : 1) * goldMultiplier);
-    const coins = Math.min(5, Math.max(1, Math.ceil(gold / 4))); for (let i = 0; i < coins; i++) this.spawnPickup('gold', enemy.x + rand(-18,18), enemy.y + rand(-18,18), Math.ceil(gold / coins));
+    if (gold > 0) {
+      const coins = Math.min(5, Math.ceil(gold / 4)); for (let i = 0; i < coins; i++) this.spawnPickup('gold', enemy.x + rand(-18,18), enemy.y + rand(-18,18), Math.ceil(gold / coins));
+    }
     if (enemy.kind === 'boss') { this.projectiles = []; this.hazards = []; this.endTimer = 2.6; this.audio.play('victory'); this.renderer.flash = .25; }
-    else {
+    else if (!enemy.summoned) {
       if (Math.random() < .1) this.spawnPickup('heal', enemy.x + 12, enemy.y, 12);
       if (Math.random() < .045) this.spawnPickup('potion', enemy.x - 12, enemy.y, 1);
       if (enemy.elite) { this.spawnRelic(enemy.x, enemy.y - 15); this.spawnPickup('key', enemy.x + 22, enemy.y + 8, 1); }
@@ -341,24 +407,19 @@ export class Game implements UIActions {
     }
   }
 
-  private applyUpgrade(id: UpgradeId): void {
-    const p = this.player;
-    switch (id) {
-      case 'vitality': p.maxHp += 25; this.heal(25, false); break;
-      case 'might': p.damage *= 1.18; break; case 'fury': p.attackRate = Math.max(.18, p.attackRate * .86); break;
-      case 'swiftness': p.speed *= 1.1; break; case 'dash': p.dashCooldown = Math.max(.55, p.dashCooldown * .82); break;
-      case 'reach': p.range += 14; break; case 'critical': p.critChance = Math.min(.65, p.critChance + .08); break;
-      case 'armor': p.armor += 3; break; case 'leech': p.lifeSteal += .05; break; case 'burn': p.burnChance = Math.max(p.burnChance, .35); break;
-      case 'roomHeal': p.roomHeal += 8; break; case 'dashShield': p.dashShield = true; break;
-    }
-  }
-
   private updateEnemies(dt: number): void {
     if (this.roomIntro > .8) return;
     for (const enemy of this.enemies) {
-      if (enemy.state === 'dead') continue;
+      if (enemy.state === 'dead') { enemy.deathTimer = Math.max(0, enemy.deathTimer - dt); continue; }
       enemy.flash = Math.max(0, enemy.flash - dt); enemy.cooldown -= dt; enemy.contactCd -= dt; enemy.slow = Math.max(0, enemy.slow - dt);
-      if (enemy.burn > 0) { enemy.burn -= dt; enemy.burnTick -= dt; if (enemy.burnTick <= 0) { enemy.burnTick = .55; this.damageEnemy(enemy, Math.max(2, Math.round(this.player.damage * .1)), false); if (enemy.hp <= 0) continue; } }
+      if (enemy.burn > 0) {
+        const previousBurn = enemy.burn; enemy.burn = Math.max(0, enemy.burn - dt); enemy.burnTick -= dt;
+        if (enemy.burnTick <= 0) {
+          enemy.burnTick = .55; this.effect(enemy.x, enemy.y, 'burnTick', .22, Math.max(58, enemy.radius * 2.8));
+          this.damageEnemy(enemy, Math.max(2, Math.round(this.player.damage * .1)), false); if (enemy.hp <= 0) continue;
+        }
+        if (previousBurn > 0 && enemy.burn <= 0) this.effect(enemy.x, enemy.y, 'burnExpire', .32, Math.max(62, enemy.radius * 3));
+      }
       enemy.aim = Math.atan2(this.player.y - enemy.y, this.player.x - enemy.x);
       if (enemy.kind === 'boss') this.updateBoss(enemy, dt); else this.updateRegularEnemy(enemy, dt);
       enemy.x = clamp(enemy.x, WORLD.wall + enemy.radius, WORLD.width - WORLD.wall - enemy.radius); enemy.y = clamp(enemy.y, WORLD.wall + enemy.radius, WORLD.height - WORLD.wall - enemy.radius);
@@ -391,7 +452,7 @@ export class Game implements UIActions {
 
   private executeEnemyAttack(enemy: Enemy): void {
     const direction = normalize({ x: this.player.x - enemy.x, y: this.player.y - enemy.y });
-    if (enemy.kind === 'archer') { this.spawnProjectile(enemy.x + direction.x * 22, enemy.y + direction.y * 22, direction.x * 265, direction.y * 265, enemy.damage, true, '#d585b5', enemy.id); this.audio.play('shoot'); enemy.state = 'recover'; enemy.stateTimer = .42; }
+    if (enemy.kind === 'archer') { this.spawnProjectile(enemy.x + direction.x * 22, enemy.y + direction.y * 22, direction.x * 265, direction.y * 265, enemy.damage, true, '#d585b5', enemy.id, 'arrow'); this.audio.play('shoot'); enemy.state = 'recover'; enemy.stateTimer = .42; }
     else if (enemy.kind === 'skeleton') { if (dist(enemy, this.player) < 86) this.damagePlayer(enemy.damage, enemy); enemy.state = 'recover'; enemy.stateTimer = .55; this.burst(enemy.x + direction.x * 30, enemy.y + direction.y * 30, '#e3d0ad', 4, 80); }
     else { enemy.vx = direction.x * (enemy.kind === 'shadow' ? 440 : 285); enemy.vy = direction.y * (enemy.kind === 'shadow' ? 440 : 285); enemy.state = 'attack'; enemy.stateTimer = enemy.kind === 'shadow' ? .34 : .42; enemy.contactCd = 0; }
   }
@@ -418,7 +479,7 @@ export class Game implements UIActions {
   private executeBossAttack(boss: Enemy): void {
     const dir = normalize({ x: this.player.x - boss.x, y: this.player.y - boss.y });
     if (boss.attackType === 0) { if (dist(boss, this.player) < 130) this.damagePlayer(boss.damage, boss); this.spawnHazard('shockwave', boss.x, boss.y, 150, .12, .75, boss.damage - 5); this.renderer.shake = 9; boss.state = 'recover'; boss.stateTimer = .65; }
-    else if (boss.attackType === 1) { const count = boss.phase === 2 ? 16 : 10; for (let i = 0; i < count; i++) { const a = i / count * Math.PI * 2 + this.time * .2; this.spawnProjectile(boss.x, boss.y, Math.cos(a) * 195, Math.sin(a) * 195, boss.damage - 7, true, '#d95b82', boss.id); } this.audio.play('shoot'); boss.state = 'recover'; boss.stateTimer = .65; }
+    else if (boss.attackType === 1) { const count = boss.phase === 2 ? 16 : 10; for (let i = 0; i < count; i++) { const a = i / count * Math.PI * 2 + this.time * .2; this.spawnProjectile(boss.x, boss.y, Math.cos(a) * 195, Math.sin(a) * 195, boss.damage - 7, true, '#d95b82', boss.id, 'orb'); } this.audio.play('shoot'); boss.state = 'recover'; boss.stateTimer = .65; }
     else if (boss.attackType === 2) { boss.state = 'recover'; boss.stateTimer = .55; }
     else if (boss.attackType === 3) { boss.vx = dir.x * 460; boss.vy = dir.y * 460; boss.state = 'attack'; boss.stateTimer = .52; boss.contactCd = 0; }
     else { this.spawnEnemy('shadow', boss.x - 50, boss.y + 20, true, true); this.spawnEnemy('skeleton', boss.x + 50, boss.y + 20, false, true); boss.state = 'recover'; boss.stateTimer = .8; this.ui.toast('Schatten erheben sich!', 'danger'); }
@@ -441,7 +502,7 @@ export class Game implements UIActions {
 
   private heal(amount: number, visible = true): void {
     const p = this.player; const actual = Math.min(amount, p.maxHp - p.hp); if (actual <= 0) return; p.hp += actual;
-    if (visible) { this.floatText(p.x, p.y - 25, `+${Math.ceil(actual)}`, '#79e0a4', 17); this.burst(p.x, p.y, '#70d49a', 9, 90); }
+    if (visible) { this.floatText(p.x, p.y - 25, `+${Math.ceil(actual)}`, '#79e0a4', 17); this.burst(p.x, p.y, '#70d49a', 9, 90); this.effect(p.x, p.y, 'heal', .48, 94); }
   }
 
   private updateProjectiles(dt: number): void {
@@ -486,8 +547,7 @@ export class Game implements UIActions {
   private addRelic(id: RelicId): void {
     if (this.player.relics.includes(id)) { this.player.gold += 30; this.ui.toast('Reliktduplikat · +30 Gold', 'good'); return; }
     this.player.relics.push(id); this.tutorial.queue('character'); const relic = RELICS.find(r => r.id === id)!;
-    if (id === 'blood-blade') this.player.lifeSteal += .03; if (id === 'guardian-ring') this.player.armor += 4;
-    if (id === 'shadow-boots') this.player.dashCooldown *= .8; if (id === 'ember-core') this.player.burnChance = Math.max(this.player.burnChance, .35);
+    syncPlayerStats(this.player);
     this.audio.play('pickup'); this.ui.toast(`${relic.icon} ${relic.name}: ${relic.description}`, 'good'); this.renderer.flash = .08;
   }
 
@@ -496,7 +556,12 @@ export class Game implements UIActions {
       if (this.room.chest.locked && this.player.keys <= 0) { this.ui.toast('Ein Runenschlüssel wird benötigt', 'danger'); return; }
       if (this.room.chest.locked) this.player.keys--; this.room.chest.opened = true; this.room.rewardClaimed = true; this.tutorial.complete('interact'); this.audio.play('chest'); this.spawnRelic(this.room.chest.x, this.room.chest.y - 25); this.spawnPickup('gold', this.room.chest.x - 24, this.room.chest.y + 18, 25); this.spawnPickup(Math.random() < .5 ? 'damage' : 'speed', this.room.chest.x + 24, this.room.chest.y + 18, 1); return;
     }
-    if (this.room.kind === 'rest' && !this.room.rewardClaimed && dist(this.player, { x: WORLD.width / 2, y: WORLD.height / 2 }) < INTERACT_RANGE) {
+    if (this.room.kind === 'shop' && this.room.shop && dist(this.player, this.room.shop.lydia) < INTERACT_RANGE + 12) {
+      this.mode = 'shop'; this.input.reset(); this.tutorial.complete('interact');
+      this.ui.showShop(this.lydiaShop, this.player); return;
+    }
+    const restPosition = this.room.kind === 'shop' ? this.room.shop?.rest : this.room.kind === 'rest' ? { x: WORLD.width / 2, y: WORLD.height / 2 } : undefined;
+    if (restPosition && !this.room.rewardClaimed && dist(this.player, restPosition) < INTERACT_RANGE) {
       this.room.rewardClaimed = true; this.tutorial.complete('interact'); this.heal(this.player.maxHp * .45); this.player.potions++; this.audio.play('potion'); this.ui.toast('Die Zuflucht heilt deine Wunden', 'good'); return;
     }
     this.ui.toast('Nichts zum Interagieren');
@@ -553,11 +618,11 @@ export class Game implements UIActions {
     const base = ENEMY_STATS[kind]; const depthScale = kind === 'boss' ? 1 : 1 + this.room.depth * .09; const eliteScale = elite ? 2.1 : 1; const smallScale = summoned && kind === 'slime' ? .52 : 1;
     const enemy: Enemy = { id: this.nextId++, kind, x, y, radius: (kind === 'boss' ? 44 : kind === 'slime' ? 21 : kind === 'shadow' ? 18 : 17) * smallScale,
       hp: Math.round(base.hp * depthScale * eliteScale * smallScale), maxHp: Math.round(base.hp * depthScale * eliteScale * smallScale), speed: base.speed * (elite ? 1.1 : 1), damage: Math.round(base.damage * (1 + this.room.depth * .045) * (elite ? 1.3 : 1)),
-      xp: Math.round(base.xp * (elite ? 2.2 : 1) * smallScale), gold: [...base.gold], elite, state: 'chase', stateTimer: 0, cooldown: rand(.6, 1.2), aim: 0, vx: 0, vy: 0, flash: 0, slow: 0, burn: 0, burnTick: .1, phase: 1, attackType: -1, summoned, contactCd: 0 };
+      xp: summoned ? 0 : Math.round(base.xp * (elite ? 2.2 : 1) * smallScale), gold: summoned ? [0, 0] : [base.gold[0], base.gold[1]], elite, state: 'chase', stateTimer: 0, cooldown: rand(.6, 1.2), aim: 0, vx: 0, vy: 0, flash: 0, slow: 0, burn: 0, burnTick: .1, phase: 1, attackType: -1, summoned, contactCd: 0, deathTimer: 0 };
     this.enemies.push(enemy); return enemy;
   }
 
-  private spawnProjectile(x: number, y: number, vx: number, vy: number, damage: number, hostile: boolean, color: string, owner: number): void { this.projectiles.push({ id: this.nextId++, x, y, vx, vy, radius: hostile ? 6 : 5, damage, life: 4, hostile, color, owner, piercing: false }); }
+  private spawnProjectile(x: number, y: number, vx: number, vy: number, damage: number, hostile: boolean, color: string, owner: number, visual?: ProjectileVisual): void { this.projectiles.push({ id: this.nextId++, x, y, vx, vy, radius: hostile ? 6 : 5, damage, life: 4, hostile, color, owner, piercing: false, visual }); }
   private spawnHazard(type: Hazard['type'], x: number, y: number, radius: number, warning: number, active: number, damage: number): void { this.hazards.push({ id: this.nextId++, type, x, y, radius, warning, active, damage, phase: 0, hitPlayer: false, ringRadius: 22 }); }
   private spawnPickup(kind: Pickup['kind'], x: number, y: number, amount: number): void { this.pickups.push({ id: this.nextId++, kind, x: clamp(x, 70, 890), y: clamp(y, 70, 470), amount, life: 60, phase: rand(0, 9), collected: false }); }
   private spawnRelic(x: number, y: number): void { const available = RELICS.filter(r => !this.player.relics.includes(r.id)); const relic = pick(available.length ? available : RELICS); this.pickups.push({ id: this.nextId++, kind: 'relic', relic: relic.id, x, y, amount: 1, life: 90, phase: rand(0, 9), collected: false }); }
@@ -573,13 +638,23 @@ export class Game implements UIActions {
   }
 
   private particle(x: number, y: number, color: string, vx: number, vy: number, life: number, size: number): void { this.particles.push({ x, y, vx, vy, life, maxLife: life, color, size, gravity: 35 }); }
+  private effect(x: number, y: number, visual: ParticleVisual, life: number, size: number, rotation = 0, scaleX = 1, scaleY = 1): void {
+    this.particles.push({ x, y, vx: 0, vy: 0, life, maxLife: life, color: '#fff', size, gravity: 0, visual, rotation, scaleX, scaleY });
+  }
   private burst(x: number, y: number, color: string, count: number, speed: number): void { if (this.store.settings.reducedEffects) count = Math.ceil(count * .35); for (let i = 0; i < count; i++) { const a = rand(0, Math.PI * 2); const s = rand(speed * .25, speed); this.particle(x, y, color, Math.cos(a) * s, Math.sin(a) * s, rand(.22, .62), rand(2, 6)); } }
   private floatText(x: number, y: number, text: string, color: string, size: number): void { this.texts.push({ x, y, text, color, size, life: .8, maxLife: .8 }); }
-  private lightning(from: Vec, to: Vec): void { const steps = 10; for (let i = 0; i <= steps; i++) { const t = i / steps; this.particle(from.x + (to.x - from.x) * t + rand(-5,5), from.y + (to.y - from.y) * t + rand(-5,5), '#d4b5ff', 0, 0, .18, 3); } }
+  private lightning(from: Vec, to: Vec): void {
+    const length = dist(from, to); const angle = Math.atan2(to.y - from.y, to.x - from.x);
+    this.effect((from.x + to.x) / 2, (from.y + to.y) / 2, 'lightning', .24, Math.max(72, length), angle, 1, .42);
+    const steps = this.store.settings.reducedEffects ? 4 : 10;
+    for (let i = 0; i <= steps; i++) { const t = i / steps; this.particle(from.x + (to.x - from.x) * t + rand(-5,5), from.y + (to.y - from.y) * t + rand(-5,5), '#d4b5ff', 0, 0, .18, 3); }
+  }
 
   private moveCircle(entity: Vec, dx: number, dy: number, radius: number): void {
-    entity.x += dx; for (const o of this.room.obstacles) if (o.solid && o.hp > 0 && circleHit(entity, radius, o, o.radius)) entity.x -= dx;
-    entity.y += dy; for (const o of this.room.obstacles) if (o.solid && o.hp > 0 && circleHit(entity, radius, o, o.radius)) entity.y -= dy;
+    const blocked = () => this.room.obstacles.some(o => o.solid && o.hp > 0 && circleHit(entity, radius, o, o.radius))
+      || Boolean(this.room.blockers?.some(blocker => circleHit(entity, radius, blocker, blocker.radius)));
+    entity.x += dx; if (blocked()) entity.x -= dx;
+    entity.y += dy; if (blocked()) entity.y -= dy;
     entity.x = clamp(entity.x, WORLD.wall + radius, WORLD.width - WORLD.wall - radius); entity.y = clamp(entity.y, WORLD.wall + radius, WORLD.height - WORLD.wall - radius);
   }
   private moveEnemy(enemy: Enemy, dx: number, dy: number): void { this.moveCircle(enemy, dx, dy, enemy.radius); }
@@ -593,7 +668,11 @@ export class Game implements UIActions {
 
   private updateHud(dt: number): void {
     const alive = this.enemies.filter(e => e.state !== 'dead'); const boss = alive.find(e => e.kind === 'boss');
-    let objective = this.room.state === 'active' ? `${alive.length} ${alive.length === 1 ? 'Feind' : 'Feinde'} verbleiben` : this.room.kind === 'treasure' && !this.room.chest?.opened ? 'Die Schatztruhe wartet' : this.room.kind === 'rest' && !this.room.rewardClaimed ? 'Der Runenkreis spendet Kraft' : 'Türen geöffnet · Dungeon erkunden';
+    let objective = this.room.state === 'active' ? `${alive.length} ${alive.length === 1 ? 'Feind' : 'Feinde'} verbleiben`
+      : this.room.kind === 'treasure' && !this.room.chest?.opened ? 'Die Schatztruhe wartet'
+      : this.room.kind === 'shop' ? 'Lydia handelt · Runenkreis bereit'
+      : this.room.kind === 'rest' && !this.room.rewardClaimed ? 'Der Runenkreis spendet Kraft'
+      : 'Türen geöffnet · Dungeon erkunden';
     if (boss) objective = boss.phase === 2 ? 'Phase II · Gebrochene Siegel' : 'Phase I · Der Wächter erwacht';
     const p = this.player; const context = this.contextHint();
     if (context && context.tone !== 'danger') this.tutorial.queue('interact');
@@ -608,6 +687,7 @@ export class Game implements UIActions {
       hp: p.hp, maxHp: p.maxHp, xp: p.xp, xpNeeded: p.xpNeeded, level: p.level, gold: p.gold, keys: p.keys,
       showKeys: p.keys > 0 || Boolean(this.room.chest?.locked), potions: p.potions, potionHeal: 42, dashRemaining: p.dashCdTimer,
       dashCooldown: p.dashCooldown, roomName: this.renderer.roomName(this.room), objective, combat: this.room.state === 'active', context: tutorial?.id === 'interact' ? undefined : context, tutorial,
+      minimapHtml: this.buildMiniMapHtml(),
       effects: [
         ...(p.damageBuff > 0 ? [{ id: 'damage', label: 'Klingenrausch', value: `+35 % · ${Math.ceil(p.damageBuff)} s`, tone: 'damage' as const }] : []),
         ...(p.speedBuff > 0 ? [{ id: 'speed', label: 'Windsegen', value: `+30 % · ${Math.ceil(p.speedBuff)} s`, tone: 'speed' as const }] : []),
@@ -623,12 +703,24 @@ export class Game implements UIActions {
       if (this.room.chest.locked && this.player.keys <= 0) return { key: 'E', text: 'Runenschlüssel benötigt', tone: 'danger' };
       return { key: 'E', text: this.room.chest.locked ? 'Schatztruhe aufschließen' : 'Truhe öffnen' };
     }
-    if (this.room.kind === 'rest' && !this.room.rewardClaimed && dist(this.player, { x: WORLD.width / 2, y: WORLD.height / 2 }) < INTERACT_RANGE) return { key: 'E', text: 'Am Runenkreis rasten' };
+    if (this.room.kind === 'shop' && this.room.shop && dist(this.player, this.room.shop.lydia) < INTERACT_RANGE + 12) return { key: 'E', text: 'Mit Lydia handeln' };
+    const restPosition = this.room.kind === 'shop' ? this.room.shop?.rest : this.room.kind === 'rest' ? { x: WORLD.width / 2, y: WORLD.height / 2 } : undefined;
+    if (restPosition && !this.room.rewardClaimed && dist(this.player, restPosition) < INTERACT_RANGE) return { key: 'E', text: 'Am Runenkreis rasten' };
     return undefined;
   }
 
   private buildMapHtml(): string {
     return renderMapViewMarkup(buildMapViewModel(this.rooms, this.room));
+  }
+
+  private buildMiniMapHtml(): string {
+    const visited = [...this.rooms.values()].filter(room => room.visited).map(room => room.id).sort().join(',');
+    const signature = `${this.room.id}|${this.room.state}|${visited}`;
+    if (signature !== this.minimapSignature) {
+      this.minimapSignature = signature;
+      this.minimapHtml = renderMiniMapMarkup(buildMiniMapViewModel(this.rooms, this.room));
+    }
+    return this.minimapHtml;
   }
 
   private finish(victory: boolean): void {

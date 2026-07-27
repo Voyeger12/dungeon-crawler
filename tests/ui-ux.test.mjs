@@ -110,7 +110,7 @@ try {
     append(...children) { this.children.push(...children); this.mutations++; }
     replaceChildren(...children) { this.children = children; this.mutations++; }
   }
-  const hudSelectors = ['#hud','#level-value','#health-bar','#health-fill','#health-text','#xp-bar','#xp-fill','#xp-text','#room-title','#objective','#gold-value','#key-resource','#key-value','#potion-action','#potion-count','#potion-state','#dash-indicator','#dash-fill','#dash-state','#effects','#tutorial-hint','#tutorial-key','#tutorial-title','#tutorial-text','#context-prompt','#context-key','#context-text','#boss-hud','#boss-bar','#boss-fill','#boss-name','#boss-text','#game-status-region','#game-alert-region'];
+  const hudSelectors = ['#hud','#level-value','#health-bar','#health-fill','#health-text','#xp-bar','#xp-fill','#xp-text','#room-title','#objective','#gold-value','#key-resource','#key-value','#potion-action','#potion-count','#potion-state','#dash-indicator','#dash-fill','#dash-state','#minimap-content','#effects','#tutorial-hint','#tutorial-key','#tutorial-title','#tutorial-text','#context-prompt','#context-key','#context-text','#boss-hud','#boss-bar','#boss-fill','#boss-name','#boss-text','#game-status-region','#game-alert-region'];
   const hudElements = new Map(hudSelectors.map(selector => [selector, new FakeElement()]));
   globalThis.document = { querySelector: selector => hudElements.get(selector) ?? null, createElement: () => new FakeElement() };
   globalThis.window = { setTimeout: callback => { callback(); return 1; } };

@@ -10,7 +10,7 @@ try {
     id, kind: 'skeleton', x, y, radius: 10, hp: 500, maxHp: 500, speed: 0, damage: 0,
     xp: 0, gold: [0, 0], elite: false, state: 'chase', stateTimer: 0, cooldown: 0,
     aim: 0, vx: 0, vy: 0, flash: 0, slow: 0, burn: 0, burnTick: 0,
-    phase: 1, attackType: -1, summoned: false, contactCd: 0
+    phase: 1, attackType: -1, summoned: false, contactCd: 0, deathTimer: 0
   });
 
   const harness = () => {
@@ -30,6 +30,7 @@ try {
     game.tutorial = { complete() {}, queue() {} };
     game.floatText = () => {};
     game.burst = () => {};
+    game.effect = () => {};
     const bolts = [];
     game.lightning = (from, to) => bolts.push([from.id, to.id]);
     return { game, bolts };
@@ -44,6 +45,8 @@ try {
     game.attack();
 
     assert.equal(game.player.attackCount, 3, 'the attack counter should reach the third attack');
+    assert.equal(chainCalls, 0, 'the lightning chain must wait for the visible weapon contact');
+    game.updateTimers(.061);
     assert.equal(chainCalls, 1, 'a multi-hit third attack must start exactly one lightning chain');
     assert.deepEqual(bolts, [[1, 2], [2, 3]], 'the chain must hit at most two distinct secondary targets');
     assert.equal(game.enemies[0].hp, 476, 'the deterministic nearest origin receives only direct damage');
@@ -69,7 +72,7 @@ try {
     const { game, bolts } = harness();
     game.enemies.forEach(target => { target.hp = 1_000_000_000; target.maxHp = 1_000_000_000; });
     game.player.range = 1_000_000_000;
-    for (let i = 0; i < 1_000; i++) { game.player.attackTimer = 0; game.attack(); }
+    for (let i = 0; i < 1_000; i++) { game.player.attackTimer = 0; game.attack(); game.updateTimers(.061); }
     assert.equal(game.player.attackCount, 1002, 'a long multi-hit attack soak must finish without recursion or a frozen loop');
     assert.equal(bolts.length, 668, '1,000 attacks should create exactly two bounded chain segments on each third hit');
     assert.equal(game.enemies.every(target => Number.isFinite(target.hp) && target.hp > 0), true, 'stress targets must remain in a valid numeric state');
