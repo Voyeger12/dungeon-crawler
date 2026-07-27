@@ -30,6 +30,7 @@ export interface HudState {
   roomName: string;
   objective: string;
   combat: boolean;
+  minimapHtml?: string;
   context?: HudContext;
   effects: HudEffect[];
   tutorial?: TutorialPrompt;
@@ -56,6 +57,7 @@ type CachedElements = {
   dash: HTMLElement;
   dashFill: HTMLElement;
   dashState: HTMLElement;
+  minimap: HTMLElement;
   effects: HTMLElement;
   tutorial: HTMLElement;
   tutorialKey: HTMLElement;
@@ -84,12 +86,13 @@ export class HudView {
     hud: required('#hud'), level: required('#level-value'), healthBar: required('#health-bar'), healthFill: required('#health-fill'), healthText: required('#health-text'),
     xpBar: required('#xp-bar'), xpFill: required('#xp-fill'), xpText: required('#xp-text'), roomTitle: required('#room-title'), objective: required('#objective'),
     gold: required('#gold-value'), keyResource: required('#key-resource'), keys: required('#key-value'), potionAction: required('#potion-action'), potionCount: required('#potion-count'),
-    potionState: required('#potion-state'), dash: required('#dash-indicator'), dashFill: required('#dash-fill'), dashState: required('#dash-state'), effects: required('#effects'),
+    potionState: required('#potion-state'), dash: required('#dash-indicator'), dashFill: required('#dash-fill'), dashState: required('#dash-state'), minimap: required('#minimap-content'), effects: required('#effects'),
     tutorial: required('#tutorial-hint'), tutorialKey: required('#tutorial-key'), tutorialTitle: required('#tutorial-title'), tutorialText: required('#tutorial-text'),
     context: required('#context-prompt'), contextKey: required('#context-key'), contextText: required('#context-text'), boss: required('#boss-hud'), bossBar: required('#boss-bar'),
     bossFill: required('#boss-fill'), bossName: required('#boss-name'), bossText: required('#boss-text'), status: required('#game-status-region'), alert: required('#game-alert-region')
   };
   private effectSignature = '';
+  private minimapSignature = '';
 
   show(): void { this.elements.hud.classList.remove('hidden'); }
   hide(): void { this.elements.hud.classList.add('hidden'); }
@@ -113,6 +116,9 @@ export class HudView {
 
     const dashReady = state.dashRemaining <= 0; const dashProgress = dashReady ? 1 : clamp(1 - state.dashRemaining / Math.max(.001, state.dashCooldown), 0, 1);
     this.style(e.dashFill, '--progress', `${Math.round(dashProgress * 1000) / 10}%`); this.text(e.dashState, dashReady ? 'Bereit' : `${state.dashRemaining.toFixed(1)} s`); this.data(e.dash, 'state', dashReady ? 'ready' : 'cooldown');
+
+    const minimapHtml = state.minimapHtml ?? '';
+    if (minimapHtml !== this.minimapSignature) { this.minimapSignature = minimapHtml; e.minimap.innerHTML = minimapHtml; }
 
     const effectSignature = state.effects.map(effect => `${effect.id}:${effect.value}`).join('|');
     if (effectSignature !== this.effectSignature) {

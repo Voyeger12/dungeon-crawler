@@ -1,11 +1,14 @@
 import type { RelicId, UpgradeId } from './config';
+import type { EquipmentState, ItemId } from './items';
 import type { Vec } from './math';
 
 export type Direction = 'north' | 'south' | 'east' | 'west';
-export type RoomKind = 'start' | 'combat' | 'elite' | 'treasure' | 'rest' | 'boss';
+export type RoomKind = 'start' | 'combat' | 'elite' | 'treasure' | 'rest' | 'shop' | 'boss';
 export type RoomState = 'undiscovered' | 'ready' | 'active' | 'cleared';
 export type EnemyKind = 'skeleton' | 'slime' | 'archer' | 'shadow' | 'boss';
 export type PickupKind = 'gold' | 'heal' | 'potion' | 'key' | 'damage' | 'speed' | 'relic';
+export type ProjectileVisual = 'arrow' | 'orb';
+export type ParticleVisual = 'hit' | 'crit' | 'burnIgnite' | 'burnTick' | 'burnExpire' | 'heal' | 'lightning' | 'wind';
 
 export interface Obstacle extends Vec {
   id: number; radius: number; kind: 'pillar' | 'crate' | 'barrel' | 'rubble' | 'spikes';
@@ -14,10 +17,19 @@ export interface Obstacle extends Vec {
 
 export interface Chest extends Vec { opened: boolean; locked: boolean; }
 
+export interface RoomBlocker extends Vec { radius: number; }
+
+export interface ShopRoomLayout {
+  forge: Vec;
+  lydia: Vec;
+  rest: Vec;
+  displaySlots: Vec[];
+}
+
 export interface Room {
   id: string; gx: number; gy: number; kind: RoomKind; state: RoomState; depth: number;
   connections: Partial<Record<Direction, string>>; obstacles: Obstacle[]; chest?: Chest;
-  visited: boolean; enemiesDefeated: number; rewardClaimed: boolean;
+  visited: boolean; enemiesDefeated: number; rewardClaimed: boolean; blockers?: RoomBlocker[]; shop?: ShopRoomLayout;
 }
 
 export interface Player extends Vec {
@@ -28,18 +40,19 @@ export interface Player extends Vec {
   dashTimer: number; dashCdTimer: number; dashDir: Vec; invuln: number; flash: number; shield: number;
   vx: number; vy: number; upgrades: UpgradeId[]; relics: RelicId[]; lifeSteal: number;
   roomHeal: number; burnChance: number; dashShield: boolean; damageBuff: number; speedBuff: number;
+  equipment: EquipmentState; ownedItems: ItemId[];
 }
 
 export interface Enemy extends Vec {
   id: number; kind: EnemyKind; radius: number; hp: number; maxHp: number; speed: number; damage: number;
   xp: number; gold: [number, number]; elite: boolean; state: 'chase' | 'telegraph' | 'attack' | 'recover' | 'dead';
   stateTimer: number; cooldown: number; aim: number; vx: number; vy: number; flash: number; slow: number;
-  burn: number; burnTick: number; phase: number; attackType: number; summoned: boolean; contactCd: number;
+  burn: number; burnTick: number; phase: number; attackType: number; summoned: boolean; contactCd: number; deathTimer: number;
 }
 
 export interface Projectile extends Vec {
   id: number; vx: number; vy: number; radius: number; damage: number; life: number;
-  hostile: boolean; color: string; owner: number; piercing: boolean;
+  hostile: boolean; color: string; owner: number; piercing: boolean; visual?: ProjectileVisual;
 }
 
 export interface Pickup extends Vec {
@@ -53,6 +66,7 @@ export interface Hazard extends Vec {
 
 export interface Particle extends Vec {
   vx: number; vy: number; life: number; maxLife: number; size: number; color: string; gravity: number;
+  visual?: ParticleVisual; rotation?: number; scaleX?: number; scaleY?: number;
 }
 
 export interface FloatText extends Vec {

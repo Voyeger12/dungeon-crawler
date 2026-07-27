@@ -137,6 +137,8 @@ try {
   assert.match(css, /font-size:\s*calc\(16px \* var\(--ui-scale/, 'the root rem scale must follow the UI setting');
   assert.match(css, /max-width:\s*1399px/, 'the compact surround must protect intermediate-width windows');
   assert.match(css, /--board-chrome:/, 'compact layouts must reserve scaled space for their HUD rows');
+  assert.match(css, /\.pause-layout\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*\.8fr\)\s+minmax\(0,\s*1\.2fr\)/s, 'pause columns must be allowed to shrink without horizontal overflow');
+  assert.match(css, /@media \(max-width: 1199px\), \(max-height: 680px\)[\s\S]*?\.pause-layout\s*\{\s*grid-template-columns:\s*1fr/, 'large UI scales must stack the pause layout in compact windows');
 
   console.log('Display, scaling, fullscreen, and save migration tests passed.');
 } finally {

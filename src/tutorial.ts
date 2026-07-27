@@ -26,7 +26,7 @@ const PROMPTS: Record<TutorialId, Omit<TutorialPrompt, 'id'>> = {
   interact: { key: 'E', title: 'Interagieren', text: 'Öffne Truhen oder raste am Runenkreis.' },
   character: { key: 'C', title: 'Charakterkodex', text: 'Prüfe Werte, Runensegen und gefundene Relikte.' },
   map: { key: 'M', title: 'Dungeonkarte', text: 'Öffne die Karte, wenn sich dein Weg verzweigt.' },
-  gold: { key: 'Gold', title: 'Beute', text: 'Gesammeltes Gold erhöht deine Endwertung.' },
+  gold: { key: 'Gold', title: 'Beute', text: 'Gold schmiedet beim Stufenaufstieg neue Runensegen und erhöht deine Endwertung.' },
   key: { key: 'Schlüssel', title: 'Runenschlüssel', text: 'Runenschlüssel öffnen versiegelte Schatztruhen.' }
 };
 

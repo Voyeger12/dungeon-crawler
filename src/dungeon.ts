@@ -1,13 +1,13 @@
 import { WORLD } from './config';
 import { pick, rand, shuffle } from './math';
-import type { Direction, Obstacle, Room, RoomKind } from './model';
+import type { Direction, Obstacle, Room, RoomBlocker, RoomKind, ShopRoomLayout } from './model';
 
 const DELTA: Record<Direction, [number, number]> = { north: [0, -1], south: [0, 1], east: [1, 0], west: [-1, 0] };
 const OPPOSITE: Record<Direction, Direction> = { north: 'south', south: 'north', east: 'west', west: 'east' };
 let obstacleId = 1;
 
 function obstaclesFor(kind: RoomKind, depth: number): Obstacle[] {
-  if (kind === 'start' || kind === 'boss') return kind === 'boss' ? [
+  if (kind === 'start' || kind === 'shop' || kind === 'boss') return kind === 'boss' ? [
     { id: obstacleId++, x: 155, y: 132, radius: 25, kind: 'pillar', solid: true, breakable: false, hp: 999, phase: rand(0, 9) },
     { id: obstacleId++, x: 805, y: 132, radius: 25, kind: 'pillar', solid: true, breakable: false, hp: 999, phase: rand(0, 9) }
   ] : [];
@@ -25,12 +25,35 @@ function obstaclesFor(kind: RoomKind, depth: number): Obstacle[] {
   return result;
 }
 
+function shopRoom(): { layout: ShopRoomLayout; blockers: RoomBlocker[] } {
+  const offset = pick([-28, 0, 26]);
+  const forgeX = 480 + offset;
+  return {
+    layout: {
+      forge: { x: forgeX, y: 184 },
+      lydia: { x: 354 + offset, y: 314 },
+      rest: { x: 756 - Math.round(offset * .25), y: 396 },
+      displaySlots: [426, 494, 562, 630, 698].map(x => ({ x: x + offset, y: 296 }))
+    },
+    blockers: [
+      { x: 275 + offset, y: 206, radius: 48 },
+      { x: 425 + offset, y: 236, radius: 51 },
+      { x: 525 + offset, y: 236, radius: 51 },
+      { x: 625 + offset, y: 236, radius: 51 },
+      { x: 710 + offset, y: 224, radius: 43 }
+    ]
+  };
+}
+
 export function generateDungeon(): Map<string, Room> {
   const rooms = new Map<string, Room>();
   const byCoord = new Map<string, string>();
   const add = (id: string, gx: number, gy: number, kind: RoomKind, depth: number) => {
     const room: Room = { id, gx, gy, kind, depth, state: kind === 'start' ? 'cleared' : 'undiscovered', connections: {}, obstacles: obstaclesFor(kind, depth), visited: false, enemiesDefeated: 0, rewardClaimed: false };
     if (kind === 'treasure') room.chest = { x: WORLD.width / 2, y: WORLD.height / 2, opened: false, locked: true };
+    if (kind === 'shop') {
+      const shop = shopRoom(); room.shop = shop.layout; room.blockers = shop.blockers;
+    }
     rooms.set(id, room); byCoord.set(`${gx},${gy}`, id); return room;
   };
   const connect = (a: Room, b: Room, direction: Direction) => { a.connections[direction] = b.id; b.connections[OPPOSITE[direction]] = a.id; };
@@ -57,7 +80,18 @@ export function generateDungeon(): Map<string, Room> {
       if (!byCoord.has(`${x},${y}`)) { const branch = add(name, x, y, kind, anchor.depth); connect(anchor, branch, direction); break; }
     }
   };
-  addBranch(path[2]!, 'treasure', 'treasure'); addBranch(path[4]!, 'rest', 'rest');
+
+  const shopAnchors = [...shuffle(path.slice(3, 6)), ...shuffle(path.slice(1, 3))];
+  const shopDirections: Direction[] = ['north', ...shuffle<Direction>(['west', 'east', 'south'])];
+  const shopPlacement = shopAnchors.flatMap(anchor => shopDirections.map(direction => {
+    const [dx, dy] = DELTA[direction];
+    return { anchor, direction, x: anchor.gx + dx, y: anchor.gy + dy };
+  })).find(candidate => !byCoord.has(`${candidate.x},${candidate.y}`));
+  if (!shopPlacement) throw new Error('Der garantierte Lydia-Raum konnte nicht platziert werden.');
+  const shop = add('lydia-shop', shopPlacement.x, shopPlacement.y, 'shop', shopPlacement.anchor.depth);
+  connect(shopPlacement.anchor, shop, shopPlacement.direction);
+
+  addBranch(path[2]!, 'treasure', 'treasure');
   return rooms;
 }
 

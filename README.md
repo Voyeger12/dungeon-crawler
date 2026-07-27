@@ -8,7 +8,7 @@
 - **HTML5 Canvas 2D** für den deterministischen, zeitbasierten Game-Loop
 - **HTML/CSS** für zugängliche Menüs, HUD und Overlays
 - **Vite 6** als Entwicklungsserver und Produktions-Bundler
-- **Web Audio API** für adaptive, mehrschichtige Musik und Soundeffekte
+- **Web Audio API** für lokal dekodierte Musikmaster, dynamische Crossfades, Fanfaren und Soundeffekte
 - **Local Storage** für Einstellungen und Bestwerte
 
 Die eigene Canvas-Engine hält die Produktion klein, offline-freundlich und unabhängig von externen Laufzeitbibliotheken. Figuren, Trefferfeedback und Beleuchtung werden dynamisch gezeichnet; lokale WebP-Assets liefern die rauen Holz-, Eisen-, Leder-, Stein- und Requisitenoberflächen. Es gibt keine Hotlinks oder zur Laufzeit nachgeladenen Fremdmedien.
@@ -73,14 +73,15 @@ Die Seite verhindert Scrollen durch Spieltasten. Diagonalbewegung wird normalisi
 - Start-, Pause-, Charakterkodex-, Karten-, Level-up-, Sieg- und Niederlagenbildschirm mit Tastatur-Fokusführung
 - Feste logische 960×540-Spielwelt mit DPR-scharfem Backbuffer, automatischer Anpassung, 720p/900p/1080p/1440p-Presets, Vollbild und vier UI-Größen
 - Optionale kontextabhängige Spielhinweise mit gespeichertem Fortschritt und Reset in den Einstellungen
-- Adaptive Dungeon-Musik mit Bass, Melodie, Flächen und Percussion, separate Lautstärken, Stummschaltung, deaktivierbare Erschütterung und reduzierte Effekte
+- Zwei lokal gestreamte nordisch-mittelalterliche Musikmaster für Erkundung und Kampf mit kontinuierlichen Loops, 2,2-Sekunden-Crossfades, Level-up-Ducking und prozeduralem Fallback
+- Separate Musik- und Effektlautstärken, Stummschaltung, deaktivierbare Erschütterung und reduzierte Effekte
 - Robuste lokale Speicherung mit validierten Standardwerten und versioniertem Speicherschlüssel
 
 ## Projektstruktur
 
 ```text
 src/
-  audio.ts       Prozedurales Web-Audio
+  audio.ts       Dynamische Musikmaster, Crossfades, Fanfaren, SFX und Synth-Fallback
   config.ts      Zentrales Balancing, Relikte und Segnungen
   dungeon.ts     Dungeon-Graph und Raumvorlagen
   display.ts     16:9-Präsentation, DPR, Vollbild und Renderpresets
@@ -96,7 +97,7 @@ src/
   tutorial.ts    Kontextabhängige Einsteigerhinweise
   ui.ts          DOM-Overlays und UI-Ereignisse
   main.ts        Einstiegspunkt
-public/assets/   Lokale UI- und Dungeonmaterialien als optimierte WebP-Dateien
+public/assets/   Lokale Musik-, UI-, Figuren- und Dungeonmedien
 ```
 
 ## Speicherung

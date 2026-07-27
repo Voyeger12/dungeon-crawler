@@ -79,3 +79,39 @@ Color palette: charcoal, dark walnut, dirty bone, rust-brown, dull brass, tiny r
 Constraints: background exactly uniform #00FF00 with no gradient, texture, vignette or green shadows. No characters, creatures, weapons, text, letters, numbers, UI, logos, watermark, blue magic, neon. Subjects fully opaque except natural holes and with crisp silhouettes for chroma-key removal.
 Avoid: inventory icons, individual framed boxes, glossy treasure, bright gold coins, cute cartoon proportions, inconsistent perspective, photoreal photograph.
 ```
+
+## Grafikpass: feste Fackelhalter
+
+```text
+Create a production-ready 2D game sprite sheet for a dark medieval Nordic dungeon brawler. Exactly three static, unlit wall-mounted torch fixtures arranged in one horizontal row of three equal cells: a front-facing fixture for a north wall, a front-facing fixture for a south wall, and one symmetric side-wall bracket that can be mirrored for east and west walls. Each fixture is a battered iron brazier cup mounted on charred oak with old rivets, rough imperfect medieval craftsmanship, no flame and no glow. Orthographic game-asset view, cohesive hand-painted dark-fantasy style, complete isolated silhouettes, generous spacing, no overlap, no crop, no text, no letters, no numbers, no frame. Background must be one perfectly flat uniform chroma-key green #00ff00 with no texture, gradient, lighting or shadow.
+```
+
+## Grafikpass: Fackelflammen
+
+```text
+Create a production-ready 2D flame animation sprite sheet for a dark medieval Nordic dungeon brawler. Exactly six distinct flame frames arranged in a perfectly regular 3 columns × 2 rows grid, one centered flame per equal cell. Every frame must share the same fixed root point and overall scale so the brazier fixture never moves; only the flame silhouette changes. Painterly fire with dark ember-red outer tongues, restrained amber middle and a small bone-white hot core, readable at small game scale, no torch, no holder, no smoke cloud, no text, no frame, no overlap or crop. Background must be one perfectly flat uniform chroma-key green #00ff00 with no texture, gradient, lighting or shadow.
+```
+
+## Grafikpass: Collectables
+
+```text
+Create a production-ready 2D collectable sprite sheet for a dark medieval Nordic dungeon brawler. Exactly eight equal cells arranged in a 4 columns × 2 rows grid. Exact row-major order: a small pile of worn rune-stamped gold coins; a leather-strapped dark red healing potion; a tied bundle of medicinal roots and herbs for instant healing; a long blackened-iron dungeon key; a broken notched blade resting on a whetstone for damage; a worn leather winged boot for speed; a closed octagonal reliquary for a rare relic; the eighth cell completely empty. One complete isolated object per occupied cell, strong distinct silhouettes, same high three-quarter game camera and lighting, hand-painted gritty medieval materials, no text, no UI frame, no overlap, no crop. Background must be one perfectly flat uniform chroma-key magenta #ff00ff with no texture, gradient or vignette.
+```
+
+## Grafikpass: Status-Effekte
+
+```text
+Create a production-ready 2D status-effect sprite sheet for a dark medieval Nordic dungeon brawler. Exactly eight isolated effects arranged in a perfectly regular 4 columns × 2 rows grid. Exact row-major order: an ignition rune ring with rising flames; a sustained U-shaped wreath of flames that can surround a creature without hiding its body; a sharp ember tick burst; a fading ember-and-ash expire curl; a low frost-and-ice ground ring; fast pale-blue wind streaks; a segmented cold-blue rune shield arc; a gold-and-bone critical-hit star impact. Hand-painted dark-fantasy VFX, strong readable silhouettes at small scale, transparent-ready edges and contained glows, no text, no frames, no overlap, no crop. Background must be one perfectly flat uniform chroma-key green #00ff00 with no texture, gradient, lighting or vignette.
+```
+
+## Grafikpass: Kampf-Effekte
+
+```text
+Create a production-ready 2D combat-effect sprite sheet for a dark medieval Nordic dungeon brawler. Exactly eight isolated effects arranged in a perfectly regular 4 columns × 2 rows grid. Exact row-major order: a normal sword impact with chipped stone and restrained blood-red streak; a broad white sword slash trail; a hostile dark-red rune orb with a short smoky tail; a blackened medieval arrow in flight; a cracked-stone fiery shockwave ring; a blood-red boss rune ground sigil; branching violet chain lightning; a pale green and bone-white healing rune with rising motes. Hand-painted gritty dark-fantasy game VFX, strong silhouettes, contained glows, no text, no frames, no overlap, no crop. Background must be one perfectly flat uniform chroma-key green #00ff00 with no texture, gradient, lighting or vignette.
+```
+
+## Grafikpass: zwölf Runensegen-Sigille
+
+```text
+Create a production-ready 2D game UI sprite sheet for a dark medieval Nordic dungeon brawler titled “Runedeep: Beneath the Broken Crown”. Exactly twelve distinct upgrade sigils arranged in a perfectly regular 4 columns × 3 rows grid, one centered sigil per equal cell, generous safe spacing, no overlap, no text, no letters, no numbers, no frames, no cards, no drop shadows outside each cell. Exact row-major order: 1 rune-carved heart for vitality; 2 heavy notched sword for might; 3 three savage claw-like fury cuts for attack speed/fury; 4 wind feather for swiftness; 5 broken circular motion rune for dash; 6 long spear-blade reach rune; 7 ominous eye with a sharp star pupil for critical strike; 8 hexagonal stone-and-iron shield for armor; 9 blood drop held by a hooked claw for life leech; 10 iron brazier with rising flame for burn; 11 healing breath spiral around a small leaf for room healing; 12 segmented rune shield with a forward streak for dash shield. Style: hand-painted, engraved physical rune sigils made of worn blackened iron, chipped sandstone, muted old gold and restrained dark red, rough imperfect medieval craftsmanship, subtle ember or cold-blue magical accents only where semantically appropriate, cohesive shape language, strong readable silhouettes at 64px, dark-fantasy game asset quality, orthographic front view. Background must be one single perfectly flat uniform chroma-key green #00ff00 across the entire canvas, with no texture, no gradient, no lighting, no vignette, and no green inside any sigil. Large square output.
+```
